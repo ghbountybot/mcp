@@ -1,0 +1,31 @@
+[package]
+name = "mcp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.95"
+axum = { version = "0.8.1", features = ["tokio"] }
+futures = "0.3.31"
+schemars = "0.8.21"
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.138"
+tokio = { version = "1.43.0", features = ["full", "macros"] }
+tokio-stream = "0.1.17"
+tower-http = { version = "0.6.2", features = ["cors", "trace"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+eyre = "0.6"
+
+[dev-dependencies]
+reqwest = { version = "0.12.12", features = ["json"] }
+
+[build-dependencies]
+prettyplease = "0.2.29"
+schemars = "0.8.21"
+serde_json = "1.0.138"
+syn = "2.0.98"
+typify = "0.3.0"
+
+[lints]
+workspace = true

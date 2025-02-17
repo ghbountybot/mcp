@@ -1,0 +1,223 @@
+---
+description: General rust rules
+globs: **/*.rs,**/*.toml
+---
+# Comprehensive Rust Best Practices Guide
+
+## Core Principles
+- **Zero Nesting**: Optimize for flat code structure
+- **Explicit Constants**: Replace magic numbers with named constants
+- **Error Handling**: Use `eyre` with explicit imports
+- **Testing**: Leverage `cargo nextest` and `trybuild`
+- **Linting**: Automated fixes with clippy
+
+## 1. Code Organization and Nesting
+
+### Early Returns with Pattern Matching
+```rust
+// Instead of:
+fn process_data(data: Option<Data>) -> eyre::Result<ProcessedData> {
+    if let Some(value) = data {
+        if value.is_valid() {
+            Ok(value.process())
+        } else {
+            Err(eyre!("Invalid data"))
+        }
+    } else {
+        Err(eyre!("No data provided"))
+    }
+}
+
+// Prefer:
+fn process_data(data: Option<Data>) -> eyre::Result<ProcessedData> {
+    let Some(value) = data else {
+        bail!("No data provided");
+    };
+    
+    if !value.is_valid() {
+        bail!("Invalid data");
+    }
+    
+    Ok(value.process())
+}
+```
+
+### Constants and Configuration
+```rust
+// Instead of magic numbers:
+const BASE_TIMEOUT_SECS: u64 = 5;
+const MAX_RETRIES: u32 = 3;
+const BUFFER_SIZE: usize = 1024;
+
+fn calculate_timeout(retries: u32) -> Duration {
+    Duration::from_secs(BASE_TIMEOUT_SECS * u64::from(retries))
+}
+```
+
+## 2. Error Handling with eyre
+
+### Explicit Imports and Usage
+```rust
+// Avoid:
+use eyre::*;
+use eyre::Result;
+
+// Prefer:
+use eyre::{bail, WrapErr};
+
+fn fetch_data() -> eyre::Result<Data> {
+    let response = make_request()
+        .wrap_err("failed to make request")?;
+        
+    let data = parse_response(&response)
+        .wrap_err_with(|| format!("failed to parse {} bytes", response.len()))?;
+        
+    Ok(data)
+}
+```
+
+## 3. Testing Practices
+
+### Unit Tests with nextest
+```fish
+# Run all tests
+cargo nextest run
+
+# Run specific test
+cargo nextest run test_name
+
+# Run with features
+cargo nextest run --all-features
+```
+
+### Integration Tests with trybuild
+```rust
+// tests/compile_tests.rs
+#[test]
+fn compile_tests() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/compile-fail/*.rs");
+    t.pass("tests/pass/*.rs");
+}
+
+// tests/compile-fail/type_error.rs
+fn main() {
+    let x: String = 42; //~ ERROR mismatched types
+}
+```
+
+## 4. Code Quality and Linting
+
+### Automated Clippy Fixes
+```fish
+# First pass: automatic fixes
+cargo clippy --fix \
+    --allow-staged \
+    --allow-dirty \
+    --all-targets \
+    --all-features \
+    --workspace \
+    --benches \
+    --tests \
+    -- -D warnings
+
+# Second pass: manual review
+cargo clippy --all-targets --all-features --workspace -- -D warnings
+```
+
+### Development Workflow
+1. Write tests first (TDD)
+2. Implement functionality
+3. Run clippy with automatic fixes
+4. Run tests with nextest
+5. Write trybuild tests for compile-time guarantees
+6. Final review for nesting and magic numbers
+
+## 5. Common Patterns and Best Practices
+
+### Functional Combinators
+```rust
+// Instead of nested matches:
+fn find_user_score(users: &HashMap<UserId, User>, id: UserId) -> Option<Score> {
+    users
+        .get(&id)
+        .and_then(|user| user.latest_game())
+        .map(|game| game.score)
+}
+```
+
+### Error Context Builders
+```rust
+fn process_with_context(input: &Input) -> eyre::Result<Output> {
+    process_input(input).wrap_err_with(|| {
+        format!(
+            "failed to process input:\n\
+             size: {} bytes\n\
+             type: {}\n\
+             timestamp: {}",
+            input.size(),
+            input.type_name(),
+            input.timestamp()
+        )
+    })
+}
+```
+
+### Macro Inspection
+```fish
+# Inspect expanded macros
+cargo expand path::to::module
+```
+
+## 6. Project Structure
+```
+your_crate/
+├── src/
+│   ├── lib.rs
+│   ├── error.rs      # Error types and conversions
+│   └── types.rs      # Core type definitions
+├── tests/
+│   ├── compile-fail/ # trybuild failure tests
+│   ├── pass/        # trybuild success tests
+│   └── integration/ # Integration tests
+└── benches/         # Performance benchmarks
+```
+
+## Best Practices Checklist
+
+1. **Code Organization**
+   - [ ] Zero nesting using early returns
+   - [ ] Constants for magic numbers
+   - [ ] Clear error handling with eyre
+   - [ ] Functional combinators where appropriate
+
+2. **Error Handling**
+   - [ ] Explicit `eyre::Result` usage
+   - [ ] Meaningful error context
+   - [ ] Structured errors with thiserror
+   - [ ] Proper error conversion
+
+3. **Testing**
+   - [ ] Unit tests with nextest
+   - [ ] Integration tests
+   - [ ] Compile-fail tests with trybuild
+   - [ ] Edge cases covered
+
+4. **Code Quality**
+   - [ ] Clippy fixes applied
+   - [ ] No magic numbers
+   - [ ] Clear documentation
+   - [ ] Consistent error handling
+
+5. **Performance**
+   - [ ] Minimal allocations
+   - [ ] Efficient error handling
+   - [ ] Appropriate use of async/await
+   - [ ] Benchmarks for critical paths
+
+Remember:
+- Run clippy fixes first
+- Write tests before implementation
+- Use explicit imports
+- Keep nesting to a minimum
+- Document non-obvious decisions
