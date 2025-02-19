@@ -78,39 +78,39 @@ impl<State> ToolRegistry<State> {
         let name = name.into();
         let schema = handler.schema();
         let handler_fn: Box<
-            dyn Fn(
-                &Map<String, serde_json::Value>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<schema::CallToolResult, Error>>>>,
+            dyn for<'a> Fn(
+                &'a State,
+                &'a Map<String, serde_json::Value>,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<schema::CallToolResult, Error>> + 'a>,
+            >,
         > = {
-            let state = &self.state;
-            Box::new(move |args: &Map<String, serde_json::Value>| {
-                let args = args.clone();
-                Box::pin(async move {
-                    let result = handler.run(state, args).await?;
-                    Ok(schema::CallToolResult {
-                        content: vec![result],
-                        is_error: Some(false),
-                        meta: serde_json::Map::new(),
+            Box::new(
+                move |state: &State, args: &Map<String, serde_json::Value>| {
+                    let args = args.clone();
+                    Box::pin(async move {
+                        let result = handler.run(state, args).await?;
+                        Ok(schema::CallToolResult {
+                            content: vec![result],
+                            is_error: Some(false),
+                            meta: serde_json::Map::new(),
+                        })
                     })
-                })
-                    as Pin<Box<dyn Future<Output = Result<schema::CallToolResult, Error>>>>
-            })
+                },
+            )
         };
 
-        self.tools.insert(
-            name.clone(),
-            Tool {
-                name,
-                schema,
-                handler: handler_fn,
-            },
-        );
+        self.tools.insert(name.clone(), Tool {
+            name,
+            schema,
+            handler: handler_fn,
+        });
     }
 
     /// Call a tool by name with the given arguments
     pub async fn call_tool(
         &self,
+        state: &State,
         request: &schema::CallToolRequest,
     ) -> Result<schema::CallToolResult, Error> {
         let tool = self.tools.get(&request.params.name).ok_or_else(|| Error {
@@ -118,7 +118,7 @@ impl<State> ToolRegistry<State> {
             code: 404,
         })?;
 
-        (tool.handler)(&request.params.arguments).await
+        (tool.handler)(state, &request.params.arguments).await
     }
 
     /// List all registered tools

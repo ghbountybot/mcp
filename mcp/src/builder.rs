@@ -13,10 +13,11 @@ pub struct Tool<State> {
     pub(crate) name: String,
     pub(crate) schema: serde_json::Value,
     pub(crate) handler: Box<
-        dyn Fn(
-            &State,
-            &Map<String, serde_json::Value>,
-        ) -> Pin<Box<dyn Future<Output = Result<schema::CallToolResult, Error>>>>,
+        dyn for<'a> Fn(
+            &'a State,
+            &'a Map<String, serde_json::Value>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<schema::CallToolResult, Error>> + 'a>>,
     >,
 }
 
