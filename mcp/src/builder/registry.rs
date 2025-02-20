@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Map;
 use std::collections::HashMap;
 use std::future::Future;
+use std::ops::AsyncFn;
 use std::pin::Pin;
 
 /// A registry for managing available tools with shared state
@@ -13,7 +14,7 @@ pub struct ToolRegistry<State> {
     state: State,
 }
 
-pub trait HandlerFn<State> {
+pub trait HandlerFn<State, I, O> {
     fn run(
         &self,
         state: &State,
@@ -23,11 +24,11 @@ pub trait HandlerFn<State> {
     fn schema(&self) -> serde_json::Value;
 }
 
-impl<State, I, F, O> HandlerFn<State> for fn(&State, I) -> F
+impl<State, F, I, O> HandlerFn<State, I, O> for F
 where
+    F: AsyncFn(&State, I) -> O,
     I: DeserializeOwned + schemars::JsonSchema,
     O: Serialize,
-    F: Future<Output = O>,
 {
     fn run(
         &self,
@@ -71,9 +72,9 @@ impl<State> ToolRegistry<State> {
     }
 
     /// Register a new tool with the given name and handler
-    pub fn register<I, O>(&mut self, name: impl Into<String>, handler: fn(&State, I) -> O)
+    pub fn register<F, I, O>(&mut self, name: impl Into<String>, handler: F)
     where
-        fn(&State, I) -> O: HandlerFn<State> + 'static,
+        F: HandlerFn<State, I, O> + Copy + 'static,
     {
         let name = name.into();
         let schema = handler.schema();
@@ -100,11 +101,14 @@ impl<State> ToolRegistry<State> {
             )
         };
 
-        self.tools.insert(name.clone(), Tool {
-            name,
-            schema,
-            handler: handler_fn,
-        });
+        self.tools.insert(
+            name.clone(),
+            Tool {
+                name,
+                schema,
+                handler: handler_fn,
+            },
+        );
     }
 
     /// Call a tool by name with the given arguments
