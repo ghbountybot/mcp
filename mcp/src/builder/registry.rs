@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Map;
 use std::collections::HashMap;
 use std::future::Future;
+use std::ops::AsyncFn;
 use std::pin::Pin;
 
 /// A registry for managing available tools with shared state
@@ -13,7 +14,7 @@ pub struct ToolRegistry<State> {
     state: State,
 }
 
-pub trait HandlerFn<State> {
+pub trait HandlerFn<State, I, O> {
     fn run(
         &self,
         state: &State,
@@ -23,11 +24,11 @@ pub trait HandlerFn<State> {
     fn schema(&self) -> serde_json::Value;
 }
 
-impl<State, I, F, O> HandlerFn<State> for fn(&State, I) -> F
+impl<State, F, I, O> HandlerFn<State, I, O> for F
 where
+    F: AsyncFn(&State, I) -> O,
     I: DeserializeOwned + schemars::JsonSchema,
     O: Serialize,
-    F: Future<Output = O>,
 {
     fn run(
         &self,
@@ -71,31 +72,33 @@ impl<State> ToolRegistry<State> {
     }
 
     /// Register a new tool with the given name and handler
-    pub fn register<I, O>(&mut self, name: impl Into<String>, handler: fn(&State, I) -> O)
+    pub fn register<F, I, O>(&mut self, name: impl Into<String>, handler: F)
     where
-        fn(&State, I) -> O: HandlerFn<State> + 'static,
+        F: HandlerFn<State, I, O> + Copy + 'static,
     {
         let name = name.into();
         let schema = handler.schema();
         let handler_fn: Box<
-            dyn Fn(
-                &Map<String, serde_json::Value>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<schema::CallToolResult, Error>>>>,
+            dyn for<'a> Fn(
+                &'a State,
+                &'a Map<String, serde_json::Value>,
+            ) -> Pin<
+                Box<dyn Future<Output = Result<schema::CallToolResult, Error>> + 'a>,
+            >,
         > = {
-            let state = &self.state;
-            Box::new(move |args: &Map<String, serde_json::Value>| {
-                let args = args.clone();
-                Box::pin(async move {
-                    let result = handler.run(state, args).await?;
-                    Ok(schema::CallToolResult {
-                        content: vec![result],
-                        is_error: Some(false),
-                        meta: serde_json::Map::new(),
+            Box::new(
+                move |state: &State, args: &Map<String, serde_json::Value>| {
+                    let args = args.clone();
+                    Box::pin(async move {
+                        let result = handler.run(state, args).await?;
+                        Ok(schema::CallToolResult {
+                            content: vec![result],
+                            is_error: Some(false),
+                            meta: serde_json::Map::new(),
+                        })
                     })
-                })
-                    as Pin<Box<dyn Future<Output = Result<schema::CallToolResult, Error>>>>
-            })
+                },
+            )
         };
 
         self.tools.insert(
@@ -111,6 +114,7 @@ impl<State> ToolRegistry<State> {
     /// Call a tool by name with the given arguments
     pub async fn call_tool(
         &self,
+        state: &State,
         request: &schema::CallToolRequest,
     ) -> Result<schema::CallToolResult, Error> {
         let tool = self.tools.get(&request.params.name).ok_or_else(|| Error {
@@ -118,11 +122,11 @@ impl<State> ToolRegistry<State> {
             code: 404,
         })?;
 
-        (tool.handler)(&request.params.arguments).await
+        (tool.handler)(state, &request.params.arguments).await
     }
 
-    /// List all registered tools
-    pub fn list_tools(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+    /// Iterate through all registered tools
+    pub fn tools_iter(&self) -> impl Iterator<Item = (&String, &Tool<State>)> {
+        self.tools.iter()
     }
 }
