@@ -125,8 +125,8 @@ impl<State> ToolRegistry<State> {
         (tool.handler)(state, &request.params.arguments).await
     }
 
-    /// List all registered tools
-    pub fn list_tools(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+    /// Iterate through all registered tools
+    pub fn tools_iter(&self) -> impl Iterator<Item = (&String, &Tool<State>)> {
+        self.tools.iter()
     }
 }

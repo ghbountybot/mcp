@@ -21,6 +21,18 @@ pub struct Tool<State> {
     >,
 }
 
+impl<State> TryFrom<&Tool<State>> for schema::Tool {
+    type Error = serde_json::Error;
+
+    fn try_from(tool: &Tool<State>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            description: todo!(),
+            input_schema: serde_json::from_value(tool.schema.clone())?,
+            name: tool.name.clone(),
+        })
+    }
+}
+
 /// A builder for constructing a tool with validation and metadata
 pub struct ToolBuilder {
     name: String,

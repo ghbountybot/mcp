@@ -1,3 +1,4 @@
+pub mod basic_service;
 pub mod builder;
 pub mod rpc;
 pub mod schema;
@@ -7,6 +8,15 @@ pub use builder::ToolRegistry;
 pub struct Error {
     pub message: String,
     pub code: i32,
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self {
+            message: format!("{error}"),
+            code: 500,
+        }
+    }
 }
 
 trait Service {
