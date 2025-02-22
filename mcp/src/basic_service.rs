@@ -1,62 +1,89 @@
 use crate::{Error, Service, builder, builder::ToolRegistry, schema};
+use std::collections::HashMap;
 
 struct BasicService<State> {
+    instructions: Option<String>,
     tool_registry: ToolRegistry<State>,
 }
 
 impl<State> Service for BasicService<State> {
-    fn init(&self, request: schema::InitializeRequest) -> Result<schema::InitializeResult, Error> {
+    async fn init(
+        &self,
+        request: schema::InitializeRequest,
+    ) -> Result<schema::InitializeResult, Error> {
+        // TODO: check for compatible MCP version
+        // TODO: Implement more capabilities
+        Ok(schema::InitializeResult {
+            capabilities: schema::ServerCapabilities {
+                experimental: HashMap::new(),
+                logging: serde_json::Map::new(),
+                prompts: None,
+                resources: None,
+                tools: Some(schema::ServerCapabilitiesTools {
+                    list_changed: Some(false),
+                }),
+            },
+            instructions: self.instructions.clone(),
+            meta: serde_json::Map::new(),
+            protocol_version: "1.0.0".to_string(),
+            server_info: schema::Implementation {
+                name: "BasicServer".to_string(),
+                version: "0.1.0".to_string(),
+            },
+        })
+    }
+
+    async fn ping(&self, _: schema::PingRequest) -> Result<schema::Result, Error> {
         todo!()
     }
 
-    fn ping(&self, _: schema::PingRequest) -> Result<schema::Result, Error> {
-        todo!()
-    }
-
-    fn list_resources(
+    async fn list_resources(
         &self,
         request: schema::ListResourcesRequest,
     ) -> Result<schema::ListResourcesResult, Error> {
         todo!()
     }
 
-    fn list_resource_templates(
+    async fn list_resource_templates(
         &self,
         request: schema::ListResourceTemplatesRequest,
     ) -> Result<schema::ListResourceTemplatesResult, Error> {
         todo!()
     }
 
-    fn read_resource(
+    async fn read_resource(
         &self,
         request: schema::ReadResourceRequest,
     ) -> Result<schema::ReadResourceResult, Error> {
         todo!()
     }
 
-    fn subscribe(&self, request: schema::SubscribeRequest) -> Result<schema::Result, Error> {
+    async fn subscribe(&self, request: schema::SubscribeRequest) -> Result<schema::Result, Error> {
         todo!()
     }
 
-    fn unsubscribe(&self, request: schema::UnsubscribeRequest) -> Result<schema::Result, Error> {
+    async fn unsubscribe(
+        &self,
+        request: schema::UnsubscribeRequest,
+    ) -> Result<schema::Result, Error> {
         todo!()
     }
 
-    fn list_prompts(
+    async fn list_prompts(
         &self,
         request: schema::ListPromptsRequest,
     ) -> Result<schema::ListPromptsResult, Error> {
         todo!()
     }
 
-    fn get_prompt(
+    async fn get_prompt(
         &self,
         request: schema::GetPromptRequest,
     ) -> Result<schema::GetPromptResult, Error> {
         todo!()
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         request: schema::ListToolsRequest,
     ) -> Result<schema::ListToolsResult, Error> {
@@ -72,11 +99,14 @@ impl<State> Service for BasicService<State> {
         Ok(result)
     }
 
-    fn call_tool(&self, request: schema::CallToolRequest) -> Result<schema::CallToolResult, Error> {
-        todo!()
+    async fn call_tool(
+        &self,
+        request: schema::CallToolRequest,
+    ) -> Result<schema::CallToolResult, Error> {
+        self.tool_registry.call_tool(&request).await
     }
 
-    fn set_level(&self, request: schema::SetLevelRequest) -> Result<schema::Result, Error> {
+    async fn set_level(&self, request: schema::SetLevelRequest) -> Result<schema::Result, Error> {
         todo!()
     }
 }

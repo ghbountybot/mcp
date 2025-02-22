@@ -114,7 +114,6 @@ impl<State> ToolRegistry<State> {
     /// Call a tool by name with the given arguments
     pub async fn call_tool(
         &self,
-        state: &State,
         request: &schema::CallToolRequest,
     ) -> Result<schema::CallToolResult, Error> {
         let tool = self.tools.get(&request.params.name).ok_or_else(|| Error {
@@ -122,7 +121,7 @@ impl<State> ToolRegistry<State> {
             code: 404,
         })?;
 
-        (tool.handler)(state, &request.params.arguments).await
+        (tool.handler)(&self.state, &request.params.arguments).await
     }
 
     /// Iterate through all registered tools

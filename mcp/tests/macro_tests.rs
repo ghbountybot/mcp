@@ -43,7 +43,7 @@ async fn weather(state: &AppState, WeatherInput { city }: WeatherInput) -> Strin
         .ok_or_else(|| eyre::eyre!("Weather description not found"))
         .unwrap();
 
-    Ok(format!("Weather in {}: {}°C, {}", city, temp, description))
+    format!("Weather in {}: {}°C, {}", city, temp, description)
 }
 
 async fn create_registry() {
