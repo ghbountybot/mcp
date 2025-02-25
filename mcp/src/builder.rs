@@ -70,13 +70,13 @@ impl ToolBuilder {
         self
     }
 
-    // pub fn register(self, registry: &mut ToolRegistry) -> Result<(), Error> {
-    //     let handler = self.handler.ok_or_else(|| Error {
-    //         message: "Tool handler not set".to_string(),
-    //         code: 500,
-    //     })?;
-    //
-    //     registry.register(self.name, handler);
-    //     Ok(())
-    // }
+    pub fn register(self, registry: &mut ToolRegistry) -> Result<(), Error> {
+        let handler = self.handler.ok_or_else(|| Error {
+            message: "Tool handler not set".to_string(),
+            code: 500,
+        })?;
+    
+        registry.register(self.name, handler);
+        Ok(())
+    }
 }
