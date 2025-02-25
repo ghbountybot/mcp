@@ -1,103 +1,78 @@
-pub mod builder;
-pub mod rpc;
-pub mod schema;
-pub use builder::ToolRegistry;
-pub use mcp_macros::tool;
+//! # MCP - Model Context Protocol
+//! 
+//! An idiomatic Rust implementation of the Model Context Protocol (MCP).
+//! 
+//! MCP is a protocol for communication between AI models and tools.
+//! This library provides a robust, type-safe, and high-performance
+//! implementation of the MCP protocol.
+//! 
+//! ## Features
+//! 
+//! - Type-safe message handling
+//! - Multiple transport mechanisms (STDIO, SSE)
+//! - Tool registry for managing available tools
+//! - Server implementation for hosting MCP services
+//! - Client implementation for consuming MCP services
+//! 
+//! ## Example
+//! 
+//! ```rust,no_run
+//! use mcp::{
+//!     server::{McpServer, ServerConfig},
+//!     tool::{Tool, ToolRegistry, TypedTool},
+//! };
+//! use eyre::Result;
+//! use schemars::JsonSchema;
+//! use serde::{Deserialize, Serialize};
+//! 
+//! #[derive(Deserialize, JsonSchema)]
+//! struct EchoInput {
+//!     message: String,
+//! }
+//! 
+//! #[derive(Serialize)]
+//! struct EchoOutput {
+//!     response: String,
+//! }
+//! 
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     // Create a tool registry
+//!     let mut registry = ToolRegistry::new();
+//!     
+//!     // Register a tool
+//!     let echo_tool = TypedTool::new(
+//!         "echo",
+//!         "Echo back the input message",
+//!         |input: EchoInput| async move {
+//!             Ok(EchoOutput {
+//!                 response: input.message,
+//!             })
+//!         }
+//!     );
+//!     
+//!     registry.register(echo_tool);
+//!     
+//!     // Create and start the server
+//!     let server = McpServer::new(ServerConfig::default(), registry);
+//!     server.start().await?;
+//!     
+//!     Ok(())
+//! }
+//! ```
 
-#[derive(Debug)]
-pub struct Error {
-    pub message: String,
-    pub code: i32,
-}
+// Public modules
+pub mod client;
+pub mod message;
+pub mod server;
+pub mod tool;
+pub mod transport;
 
-trait Service {
-    fn init(&self, request: schema::InitializeRequest) -> Result<schema::InitializeResult, Error>;
-    fn ping(&self, _: schema::PingRequest) -> Result<schema::Result, Error> {
-        Ok(schema::Result::default())
-    }
+// Re-export commonly used types
+pub use client::McpClient;
+pub use message::McpMessage;
+pub use server::McpServer;
+pub use tool::ToolRegistry;
 
-    fn list_resources(
-        &self,
-        request: schema::ListResourcesRequest,
-    ) -> Result<schema::ListResourcesResult, Error>;
-
-    fn list_resource_templates(
-        &self,
-        request: schema::ListResourceTemplatesRequest,
-    ) -> Result<schema::ListResourceTemplatesResult, Error>;
-
-    fn read_resource(
-        &self,
-        request: schema::ReadResourceRequest,
-    ) -> Result<schema::ReadResourceResult, Error>;
-
-    fn subscribe(&self, request: schema::SubscribeRequest) -> Result<schema::Result, Error>;
-
-    fn unsubscribe(&self, request: schema::UnsubscribeRequest) -> Result<schema::Result, Error> {
-        Ok(schema::Result::default())
-    }
-
-    fn list_prompts(
-        &self,
-        request: schema::ListPromptsRequest,
-    ) -> Result<schema::ListPromptsResult, Error>;
-
-    fn get_prompt(
-        &self,
-        request: schema::GetPromptRequest,
-    ) -> Result<schema::GetPromptResult, Error>;
-
-    fn list_tools(
-        &self,
-        request: schema::ListToolsRequest,
-    ) -> Result<schema::ListToolsResult, Error>;
-
-    fn call_tool(&self, request: schema::CallToolRequest) -> Result<schema::CallToolResult, Error>;
-
-    fn set_level(&self, request: schema::SetLevelRequest) -> Result<schema::Result, Error>;
-}
-
-fn handle_request(
-    service: &impl Service,
-    request: schema::ClientRequest,
-) -> Result<schema::ServerResult, Error> {
-    match request {
-        schema::ClientRequest::InitializeRequest(r) => {
-            service.init(r).map(schema::ServerResult::InitializeResult)
-        }
-        schema::ClientRequest::PingRequest(r) => service.ping(r).map(schema::ServerResult::Result),
-        schema::ClientRequest::ListResourcesRequest(r) => service
-            .list_resources(r)
-            .map(schema::ServerResult::ListResourcesResult),
-        schema::ClientRequest::ListResourceTemplatesRequest(r) => service
-            .list_resource_templates(r)
-            .map(schema::ServerResult::ListResourceTemplatesResult),
-        schema::ClientRequest::ReadResourceRequest(r) => service
-            .read_resource(r)
-            .map(schema::ServerResult::ReadResourceResult),
-        schema::ClientRequest::SubscribeRequest(r) => {
-            service.subscribe(r).map(schema::ServerResult::Result)
-        }
-        schema::ClientRequest::UnsubscribeRequest(r) => {
-            service.unsubscribe(r).map(schema::ServerResult::Result)
-        }
-        schema::ClientRequest::ListPromptsRequest(r) => service
-            .list_prompts(r)
-            .map(schema::ServerResult::ListPromptsResult),
-        schema::ClientRequest::GetPromptRequest(r) => service
-            .get_prompt(r)
-            .map(schema::ServerResult::GetPromptResult),
-        schema::ClientRequest::ListToolsRequest(r) => service
-            .list_tools(r)
-            .map(schema::ServerResult::ListToolsResult),
-        schema::ClientRequest::CallToolRequest(r) => service
-            .call_tool(r)
-            .map(schema::ServerResult::CallToolResult),
-        schema::ClientRequest::SetLevelRequest(r) => {
-            service.set_level(r).map(schema::ServerResult::Result)
-        }
-        schema::ClientRequest::CompleteRequest(_) => {
-            Ok(schema::ServerResult::Result(schema::Result::default()))
-        }
-    }
-}
+// Re-export macros from mcp-macros
+pub use mcp_macros::{define_tool, tool};

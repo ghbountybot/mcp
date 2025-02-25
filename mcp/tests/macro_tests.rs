@@ -1,57 +1,92 @@
-use eyre::WrapErr;
-use mcp::ToolRegistry;
+use async_trait::async_trait;
+use eyre::Result;
+use mcp::{
+    define_tool, tool,
+    message::CallToolResult,
+    tool::{ToolHandler, ToolRegistry, text_content},
+};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 #[derive(Deserialize, JsonSchema)]
-struct WeatherInput {
-    city: String,
+struct EchoInput {
+    message: String,
 }
 
-#[derive(Clone)]
-struct AppState {
-    api_key: String,
-    client: reqwest::Client,
+#[derive(Serialize)]
+#[allow(dead_code)]
+struct EchoOutput {
+    response: String,
 }
 
-async fn weather(state: &AppState, WeatherInput { city }: WeatherInput) -> String {
-    let api_key = &state.api_key;
-    let url = format!(
-        "https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric",
-    );
-
-    let response = state
-        .client
-        .get(&url)
-        .send()
-        .await
-        .wrap_err("Failed to make weather API request")
-        .unwrap();
-
-    let data: serde_json::Value = response
-        .json()
-        .await
-        .wrap_err("Failed to parse weather API response")
-        .unwrap();
-
-    let temp = data["main"]["temp"]
-        .as_f64()
-        .ok_or_else(|| eyre::eyre!("Temperature data not found"))
-        .unwrap();
-    let description = data["weather"][0]["description"]
-        .as_str()
-        .ok_or_else(|| eyre::eyre!("Weather description not found"))
-        .unwrap();
-
-    Ok(format!("Weather in {}: {}°C, {}", city, temp, description))
-}
-
-async fn create_registry() {
-    let state = AppState {
-        api_key: std::env::var("OPENWEATHER_API_KEY")
-            .expect("OPENWEATHER_API_KEY environment variable not set"),
-        client: reqwest::Client::new(),
+// Test the define_tool macro
+#[tokio::test]
+async fn test_define_tool_macro() {
+    let echo_tool = define_tool! {
+        name: "echo",
+        description: "Echo back the input message",
+        input: EchoInput,
+        handler: |args| async move {
+            let input: EchoInput = serde_json::from_value(args)?;
+            
+            let content = vec![text_content(format!("Echo: {}", input.message))];
+            
+            Ok(CallToolResult {
+                content,
+                is_error: false,
+            })
+        }
     };
-    let mut registry = ToolRegistry::new(state);
-    registry.register("weather", weather);
+    
+    let mut registry = ToolRegistry::new();
+    registry.register(echo_tool);
+    
+    let args = json!({
+        "message": "Hello, world!"
+    });
+    
+    let result = registry.call_tool("echo", Some(args)).await.unwrap();
+    
+    match &result.content[0] {
+        mcp::message::Content::Text(text) => assert_eq!(text.text, "Echo: Hello, world!"),
+        _ => panic!("Expected text content"),
+    }
+}
+
+// Test the tool attribute macro
+#[tool(name = "greeting", description = "Generate a greeting message")]
+struct GreetingTool;
+
+#[async_trait]
+impl ToolHandler for GreetingTool {
+    type Input = EchoInput;
+    
+    async fn handle(&self, input: Self::Input) -> Result<CallToolResult> {
+        let content = vec![text_content(format!("Greeting: {}", input.message))];
+        
+        Ok(CallToolResult {
+            content,
+            is_error: false,
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_tool_attribute_macro() {
+    let mut registry = ToolRegistry::new();
+    registry.register(GreetingTool);
+    
+    let args = json!({
+        "message": "Hello from attribute macro!"
+    });
+    
+    let result = registry.call_tool("greeting", Some(args)).await.unwrap();
+    
+    match &result.content[0] {
+        mcp::message::Content::Text(text) => {
+            assert_eq!(text.text, "Greeting: Hello from attribute macro!")
+        },
+        _ => panic!("Expected text content"),
+    }
 }
