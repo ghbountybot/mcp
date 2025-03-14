@@ -36,7 +36,7 @@ impl<State> Service for BasicService<State> {
     }
 
     async fn ping(&self, _: schema::PingRequest) -> Result<schema::Result, Error> {
-        todo!()
+        Ok(schema::Result::default())
     }
 
     async fn list_resources(
