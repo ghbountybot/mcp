@@ -1,8 +1,8 @@
 pub mod basic_service;
-pub mod builder;
+pub mod registry;
 pub mod rpc;
 pub mod schema;
-pub use builder::ToolRegistry;
+pub use registry::{Tool, ToolRegistry};
 
 #[derive(Debug)]
 pub struct Error {

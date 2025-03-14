@@ -1,7 +1,8 @@
-use crate::{Error, Service, builder, builder::ToolRegistry, schema};
+use crate::{Error, Service, Tool, ToolRegistry, schema};
 use std::collections::HashMap;
 
 struct BasicService<State> {
+    state: State,
     instructions: Option<String>,
     tool_registry: ToolRegistry<State>,
 }
@@ -93,7 +94,7 @@ impl<State> Service for BasicService<State> {
             tools: self
                 .tool_registry
                 .tools_iter()
-                .map(|(_, tool)| schema::Tool::try_from(tool))
+                .map(|(_, tool): (_, &Tool<State>)| schema::Tool::try_from(tool))
                 .collect::<Result<Vec<_>, _>>()?,
         };
         Ok(result)
@@ -103,7 +104,7 @@ impl<State> Service for BasicService<State> {
         &self,
         request: schema::CallToolRequest,
     ) -> Result<schema::CallToolResult, Error> {
-        self.tool_registry.call_tool(&request).await
+        self.tool_registry.call_tool(&self.state, &request).await
     }
 
     async fn set_level(&self, request: schema::SetLevelRequest) -> Result<schema::Result, Error> {

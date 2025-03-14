@@ -14,7 +14,10 @@ struct AppState {
     client: reqwest::Client,
 }
 
-async fn weather(state: &AppState, WeatherInput { city }: WeatherInput) -> String {
+async fn weather(
+    state: &AppState,
+    WeatherInput { city }: WeatherInput,
+) -> Result<String, mcp::Error> {
     let api_key = &state.api_key;
     let url = format!(
         "https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric",
@@ -43,7 +46,7 @@ async fn weather(state: &AppState, WeatherInput { city }: WeatherInput) -> Strin
         .ok_or_else(|| eyre::eyre!("Weather description not found"))
         .unwrap();
 
-    format!("Weather in {}: {}°C, {}", city, temp, description)
+    Ok(format!("Weather in {}: {}°C, {}", city, temp, description))
 }
 
 async fn create_registry() {
@@ -52,6 +55,6 @@ async fn create_registry() {
             .expect("OPENWEATHER_API_KEY environment variable not set"),
         client: reqwest::Client::new(),
     };
-    let mut registry = ToolRegistry::new(state);
+    let mut registry = ToolRegistry::new();
     registry.register("weather", weather);
 }
