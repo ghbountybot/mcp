@@ -2,7 +2,7 @@ pub mod basic_service;
 pub mod registry;
 pub mod rpc;
 pub mod schema;
-pub use registry::{Tool, ToolRegistry};
+pub use registry::{Prompt, PromptRegistry, Tool, ToolRegistry};
 
 #[derive(Debug)]
 pub struct Error {

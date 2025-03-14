@@ -1,3 +1,4 @@
+pub mod prompt;
 pub mod tool;
 
 use crate::{Error, schema};
@@ -10,6 +11,7 @@ use std::marker::PhantomData;
 use std::ops::AsyncFn;
 use std::pin::Pin;
 
+pub use prompt::{Prompt, PromptRegistry};
 pub use tool::{Tool, ToolRegistry};
 
 pub type HandlerArgs = Map<String, serde_json::Value>;

@@ -1,10 +1,11 @@
-use crate::{Error, Service, Tool, ToolRegistry, schema};
+use crate::{Error, Prompt, PromptRegistry, Service, Tool, ToolRegistry, schema};
 use std::collections::HashMap;
 
 struct BasicService<State> {
     state: State,
     instructions: Option<String>,
     tool_registry: ToolRegistry<State>,
+    prompt_registry: PromptRegistry<State>,
 }
 
 impl<State> Service for BasicService<State> {
@@ -74,14 +75,23 @@ impl<State> Service for BasicService<State> {
         &self,
         request: schema::ListPromptsRequest,
     ) -> Result<schema::ListPromptsResult, Error> {
-        todo!()
+        let result = schema::ListPromptsResult {
+            meta: serde_json::Map::new(),
+            next_cursor: None,
+            prompts: self
+                .prompt_registry
+                .prompts_iter()
+                .map(|(_, prompt)| schema::Prompt::try_from(prompt))
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        Ok(result)
     }
 
     async fn get_prompt(
         &self,
         request: schema::GetPromptRequest,
     ) -> Result<schema::GetPromptResult, Error> {
-        todo!()
+        self.prompt_registry.get_prompt(&self.state, &request).await
     }
 
     async fn list_tools(
