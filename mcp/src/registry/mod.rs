@@ -1,10 +1,9 @@
 pub mod prompt;
 pub mod tool;
 
-use crate::{Error, schema};
+use crate::Error;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Map;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -14,7 +13,7 @@ use std::pin::Pin;
 pub use prompt::{Prompt, PromptRegistry};
 pub use tool::{Tool, ToolRegistry};
 
-pub type HandlerArgs = Map<String, serde_json::Value>;
+pub type HandlerArgs = HashMap<String, serde_json::Value>;
 
 pub trait HandlerFn<State, O> {
     fn run<'a>(
@@ -58,10 +57,11 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + 'a>> {
         Box::pin(async move {
             let input =
-                serde_json::from_value(serde_json::Value::Object(args)).map_err(|e| Error {
-                    message: format!("Failed to deserialize arguments: {e}"),
-                    code: 400,
-                })?;
+                serde_json::from_value(serde_json::Value::Object(args.into_iter().collect()))
+                    .map_err(|e| Error {
+                        message: format!("Failed to deserialize arguments: {e}"),
+                        code: 400,
+                    })?;
 
             (self.handler)(state, input).await
         })
@@ -84,7 +84,7 @@ impl<Handler> HandlerRegistry<Handler> {
         &self,
         state: &State,
         name: &str,
-        args: Map<String, serde_json::Value>,
+        args: HashMap<String, serde_json::Value>,
     ) -> Result<O, Error>
     where
         Handler: HandlerFn<State, O>,

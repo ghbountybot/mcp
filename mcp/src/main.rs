@@ -11,7 +11,6 @@ use tracing_subscriber::{fmt, prelude::*};
 use crate::rpc::McpImpl;
 
 mod rpc;
-mod schema;
 
 #[tokio::main]
 async fn main() {

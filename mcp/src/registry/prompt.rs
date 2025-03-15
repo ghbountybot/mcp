@@ -1,8 +1,7 @@
+use crate::Error;
 use crate::registry::{AsyncFnExt, HandlerArgs, HandlerFn, HandlerRegistry};
-use crate::{Error, schema};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Map;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -51,18 +50,18 @@ impl<State> PromptRegistry<State> {
     pub async fn get_prompt(
         &self,
         state: &State,
-        request: &schema::GetPromptRequest,
-    ) -> Result<schema::GetPromptResult, Error> {
+        request: &mcp_schema::GetPromptParams,
+    ) -> Result<mcp_schema::GetPromptResult, Error> {
         self.registry
             .call(
                 state,
-                &request.params.name,
+                &request.name,
                 request
-                    .params
                     .arguments
                     .iter()
+                    .flatten()
                     .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
-                    .collect::<Map<_, _>>(),
+                    .collect::<HashMap<_, _>>(),
             )
             .await
     }
@@ -111,43 +110,48 @@ pub struct Prompt<State> {
     handler: Box<dyn HandlerFn<State, String>>,
 }
 
-impl<State> HandlerFn<State, schema::GetPromptResult> for Prompt<State> {
+impl<State> HandlerFn<State, mcp_schema::GetPromptResult> for Prompt<State> {
     fn run<'a>(
         &'a self,
         state: &'a State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<schema::GetPromptResult, Error>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::GetPromptResult, Error>> + 'a>> {
         Box::pin(async move {
             let result = self.handler.run(state, args).await?;
             let result = serde_json::to_string(&result).unwrap();
-            let result = schema::TextContent {
-                annotations: None,
+            let result = mcp_schema::TextContent {
+                kind: "json".to_string(),
                 text: result,
-                type_: "json".to_string(),
+                annotated: mcp_schema::Annotated {
+                    annotations: None,
+                    extra: HashMap::new(),
+                },
             };
 
-            let result = schema::PromptMessage {
-                content: schema::PromptMessageContent::TextContent(result),
-                role: schema::Role::Assistant,
+            let result = mcp_schema::PromptMessage {
+                content: mcp_schema::PromptContent::Text(result),
+                role: mcp_schema::Role::Assistant,
             };
 
-            Ok(schema::GetPromptResult {
+            Ok(mcp_schema::GetPromptResult {
+                meta: None,
                 description: Some(self.description.clone()),
                 messages: vec![result],
-                meta: serde_json::Map::new(),
+                extra: HashMap::new(),
             })
         })
     }
 }
 
-impl<State> TryFrom<&Prompt<State>> for schema::Prompt {
+impl<State> TryFrom<&Prompt<State>> for mcp_schema::Prompt {
     type Error = serde_json::Error;
 
     fn try_from(prompt: &Prompt<State>) -> Result<Self, Self::Error> {
         Ok(Self {
-            arguments: serde_json::from_value(prompt.schema.clone())?,
-            description: Some(prompt.description.clone()),
             name: prompt.name.clone(),
+            description: Some(prompt.description.clone()),
+            arguments: serde_json::from_value(prompt.schema.clone())?,
+            extra: HashMap::new(),
         })
     }
 }
@@ -158,7 +162,11 @@ pub struct PromptBuilder {
     description: Option<String>,
     required_args: Vec<String>,
     handler: Option<
-        Box<dyn Fn(&Map<String, serde_json::Value>) -> Result<schema::GetPromptResult, Error>>,
+        Box<
+            dyn Fn(
+                &HashMap<String, serde_json::Value>,
+            ) -> Result<mcp_schema::GetPromptResult, Error>,
+        >,
     >,
 }
 
@@ -184,7 +192,8 @@ impl PromptBuilder {
 
     pub fn handler<F>(mut self, handler: F) -> Self
     where
-        F: Fn(&Map<String, serde_json::Value>) -> Result<schema::GetPromptResult, Error> + 'static,
+        F: Fn(&HashMap<String, serde_json::Value>) -> Result<mcp_schema::GetPromptResult, Error>
+            + 'static,
     {
         let required_args = self.required_args.clone();
         self.handler = Some(Box::new(move |args| {

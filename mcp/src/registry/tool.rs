@@ -1,8 +1,7 @@
+use crate::Error;
 use crate::registry::{AsyncFnExt, HandlerArgs, HandlerFn, HandlerRegistry};
-use crate::{Error, schema};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Map;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -48,13 +47,13 @@ impl<State> ToolRegistry<State> {
     pub async fn call_tool(
         &self,
         state: &State,
-        request: &schema::CallToolRequest,
-    ) -> Result<schema::CallToolResult, Error> {
+        request: &mcp_schema::CallToolParams,
+    ) -> Result<mcp_schema::CallToolResult, Error> {
         self.registry
             .call(
                 state,
-                &request.params.name,
-                request.params.arguments.clone(),
+                &request.name,
+                request.arguments.clone().unwrap_or_default(),
             )
             .await
     }
@@ -102,32 +101,36 @@ pub struct Tool<State> {
     handler: Box<dyn HandlerFn<State, String>>,
 }
 
-impl<State> HandlerFn<State, schema::CallToolResult> for Tool<State> {
+impl<State> HandlerFn<State, mcp_schema::CallToolResult> for Tool<State> {
     fn run<'a>(
         &'a self,
         state: &'a State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<schema::CallToolResult, Error>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::CallToolResult, Error>> + 'a>> {
         Box::pin(async move {
             let result = self.handler.run(state, args).await?;
             let result = serde_json::to_string(&result).unwrap();
-            let result = schema::TextContent {
-                annotations: None,
+            let result = mcp_schema::TextContent {
+                kind: "json".to_string(),
                 text: result,
-                type_: "json".to_string(),
+                annotated: mcp_schema::Annotated {
+                    annotations: None,
+                    extra: HashMap::new(),
+                },
             };
 
-            let result = schema::CallToolResultContentItem::TextContent(result);
-            Ok(schema::CallToolResult {
+            let result = mcp_schema::PromptContent::Text(result);
+            Ok(mcp_schema::CallToolResult {
+                meta: None,
                 content: vec![result],
                 is_error: Some(false),
-                meta: serde_json::Map::new(),
+                extra: HashMap::new(),
             })
         })
     }
 }
 
-impl<State> TryFrom<&Tool<State>> for schema::Tool {
+impl<State> TryFrom<&Tool<State>> for mcp_schema::Tool {
     type Error = serde_json::Error;
 
     fn try_from(tool: &Tool<State>) -> Result<Self, Self::Error> {
@@ -135,6 +138,7 @@ impl<State> TryFrom<&Tool<State>> for schema::Tool {
             description: todo!(),
             input_schema: serde_json::from_value(tool.schema.clone())?,
             name: tool.name.clone(),
+            extra: HashMap::new(),
         })
     }
 }
@@ -145,7 +149,11 @@ pub struct ToolBuilder {
     description: Option<String>,
     required_args: Vec<String>,
     handler: Option<
-        Box<dyn Fn(&Map<String, serde_json::Value>) -> Result<schema::CallToolResult, Error>>,
+        Box<
+            dyn Fn(
+                &HashMap<String, serde_json::Value>,
+            ) -> Result<mcp_schema::CallToolResult, Error>,
+        >,
     >,
 }
 
@@ -171,7 +179,8 @@ impl ToolBuilder {
 
     pub fn handler<F>(mut self, handler: F) -> Self
     where
-        F: Fn(&Map<String, serde_json::Value>) -> Result<schema::CallToolResult, Error> + 'static,
+        F: Fn(&HashMap<String, serde_json::Value>) -> Result<mcp_schema::CallToolResult, Error>
+            + 'static,
     {
         let required_args = self.required_args.clone();
         self.handler = Some(Box::new(move |args| {
