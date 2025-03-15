@@ -13,7 +13,7 @@ pub struct PromptRegistry<State> {
     registry: HandlerRegistry<Prompt<State>>,
 }
 
-impl<State> PromptRegistry<State> {
+impl<State: Sync> PromptRegistry<State> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -23,9 +23,14 @@ impl<State> PromptRegistry<State> {
         &mut self,
         name: impl Into<String>,
         description: impl Into<String>,
-        handler: impl AsyncFn(&State, I) -> Result<O, Error> + AsyncFnExt<State, I, O> + Copy + 'static,
+        handler: impl AsyncFn(&State, I) -> Result<O, Error>
+        + AsyncFnExt<State, I, O>
+        + Send
+        + Sync
+        + Copy
+        + 'static,
     ) where
-        I: DeserializeOwned + schemars::JsonSchema + 'static,
+        I: DeserializeOwned + schemars::JsonSchema + Send + 'static,
         O: Serialize + 'static,
     {
         let name = name.into();
@@ -82,11 +87,12 @@ impl<State> Default for PromptRegistry<State> {
 
 struct PromptHandler<F, O> {
     handler: F,
-    phantom: PhantomData<O>,
+    phantom: PhantomData<fn() -> O>,
 }
 
 impl<State, F, O> HandlerFn<State, String> for PromptHandler<F, O>
 where
+    State: Sync,
     F: HandlerFn<State, O>,
     O: Serialize,
 {
@@ -94,9 +100,10 @@ where
         &'a self,
         state: &'a State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send + 'a>> {
+        let result = self.handler.run(state, args);
         Box::pin(async move {
-            let result = self.handler.run(state, args).await?;
+            let result = result.await?;
             let result = serde_json::to_string(&result).unwrap();
             Ok(result)
         })
@@ -107,15 +114,15 @@ pub struct Prompt<State> {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) schema: serde_json::Value,
-    handler: Box<dyn HandlerFn<State, String>>,
+    handler: Box<dyn HandlerFn<State, String> + Send + Sync>,
 }
 
-impl<State> HandlerFn<State, mcp_schema::GetPromptResult> for Prompt<State> {
+impl<State: Sync> HandlerFn<State, mcp_schema::GetPromptResult> for Prompt<State> {
     fn run<'a>(
         &'a self,
         state: &'a State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::GetPromptResult, Error>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::GetPromptResult, Error>> + Send + 'a>> {
         Box::pin(async move {
             let result = self.handler.run(state, args).await?;
             let result = serde_json::to_string(&result).unwrap();

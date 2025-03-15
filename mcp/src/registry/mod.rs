@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::AsyncFn;
+use std::ops::{AsyncFn, AsyncFnMut};
 use std::pin::Pin;
 
 pub use prompt::{Prompt, PromptRegistry};
@@ -20,14 +20,28 @@ pub trait HandlerFn<State, O> {
         &'a self,
         state: &'a State,
         input: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send + 'a>>;
 }
 
 pub trait AsyncFnExt<State, I, O>: AsyncFn(&State, I) -> Result<O, Error> {
-    fn handler<'a>(self) -> impl HandlerFn<State, O> + 'a
+    fn handler<'a>(self) -> impl HandlerFn<State, O> + Send + Sync + 'a
     where
-        Self: Sized + 'a,
-        I: DeserializeOwned + 'a,
+        Self: 'a,
+        I: 'a;
+}
+
+impl<State, I, O, F> AsyncFnExt<State, I, O> for F
+where
+    F: AsyncFn(&State, I) -> Result<O, Error>,
+    Self: Send + Sync + Sized,
+    for<'b, 'c> <Self as AsyncFnMut<(&'b State, I)>>::CallRefFuture<'c>: Send,
+    State: Sync,
+    I: DeserializeOwned + Send,
+{
+    fn handler<'a>(self) -> impl HandlerFn<State, O> + Send + Sync + 'a
+    where
+        Self: 'a,
+        I: 'a,
     {
         WrappedAsyncFn {
             handler: self,
@@ -36,35 +50,32 @@ pub trait AsyncFnExt<State, I, O>: AsyncFn(&State, I) -> Result<O, Error> {
     }
 }
 
-impl<State, I, O, F> AsyncFnExt<State, I, O> for F where F: AsyncFn(&State, I) -> Result<O, Error> {}
-
 /// This wrapper is used to wrap an [`AsyncFn`] and implement [`HandlerFn`]. This is needed to
 /// store the I generic
 struct WrappedAsyncFn<F, I> {
     handler: F,
-    phantom: PhantomData<I>,
+    phantom: PhantomData<fn() -> I>,
 }
 
 impl<State, F, I, O> HandlerFn<State, O> for WrappedAsyncFn<F, I>
 where
-    F: AsyncFn(&State, I) -> Result<O, Error>,
-    I: DeserializeOwned,
+    State: Sync,
+    F: AsyncFn(&State, I) -> Result<O, Error> + Sync,
+    for<'a, 'b> <F as AsyncFnMut<(&'a State, I)>>::CallRefFuture<'b>: Send,
+    I: DeserializeOwned + Send,
 {
     fn run<'a>(
         &'a self,
         state: &'a State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + 'a>> {
-        Box::pin(async move {
-            let input =
-                serde_json::from_value(serde_json::Value::Object(args.into_iter().collect()))
-                    .map_err(|e| Error {
-                        message: format!("Failed to deserialize arguments: {e}"),
-                        code: 400,
-                    })?;
+    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send + 'a>> {
+        let input = serde_json::from_value(serde_json::Value::Object(args.into_iter().collect()))
+            .map_err(|e| Error {
+                message: format!("Failed to deserialize arguments: {e}"),
+                code: 400,
+            });
 
-            (self.handler)(state, input).await
-        })
+        Box::pin(async move { (self.handler)(state, input?).await })
     }
 }
 

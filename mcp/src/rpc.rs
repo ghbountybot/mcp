@@ -1,3 +1,4 @@
+use crate::{Error, Service};
 use axum::{
     Json,
     extract::State,
@@ -11,80 +12,37 @@ use tokio::sync::broadcast;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
-type JsonRpcFuture = Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>>;
-type HandlerFn = Box<dyn Fn(Value) -> JsonRpcFuture + Send + Sync>;
-
-#[derive(Clone)]
-pub struct McpImpl {
-    tx: Arc<broadcast::Sender<JsonRpcMessage>>,
-    handlers: Arc<HashMap<String, HandlerFn>>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct JsonRpcRequest {
-    pub jsonrpc: String,
-    pub id: Option<i32>,
-    pub method: String,
-    pub params: Option<Value>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct JsonRpcResponse {
-    pub jsonrpc: String,
-    pub id: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<JsonRpcError>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct JsonRpcError {
-    pub code: i32,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct JsonRpcNotification {
-    pub jsonrpc: String,
-    pub method: String,
-    pub params: Option<Value>,
+pub struct McpImpl<S> {
+    tx: broadcast::Sender<mcp_schema::JSONRPCResponse<mcp_schema::ServerResult>>,
+    service: S,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(untagged)]
-pub enum JsonRpcMessage {
-    Request(JsonRpcRequest),
-    Response(JsonRpcResponse),
-    Notification(JsonRpcNotification),
+pub enum ClientMessage {
+    Request(mcp_schema::ClientRequest),
+    Notification(mcp_schema::ClientNotification),
 }
 
-impl Default for McpImpl {
-    fn default() -> Self {
-        let (tx, _) = broadcast::channel(100);
-        Self {
-            tx: Arc::new(tx),
-            handlers: Arc::new(HashMap::new()),
-        }
-    }
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+pub enum ServerResponse {
+    Response(mcp_schema::JSONRPCResponse<mcp_schema::ServerResult>),
+    Error(mcp_schema::JSONRPCError),
+    None,
 }
 
-impl McpImpl {
+impl<S: Service> McpImpl<S> {
     #[must_use]
     #[allow(dead_code)]
-    pub fn new(handlers: HashMap<String, HandlerFn>) -> Self {
+    pub fn new(service: S) -> Self {
         let (tx, _) = broadcast::channel(100);
-        Self {
-            tx: Arc::new(tx),
-            handlers: Arc::new(handlers),
-        }
+        Self { tx, service }
     }
 
     #[allow(clippy::unused_async)]
     pub async fn sse_handler(
-        State(state): State<Self>,
+        State(state): State<Arc<Self>>,
     ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
         info!("New SSE connection established");
         let rx = state.tx.subscribe();
@@ -114,115 +72,232 @@ impl McpImpl {
     }
 
     pub async fn message_handler(
-        State(state): State<Self>,
-        Json(request): Json<JsonRpcRequest>,
-    ) -> Json<JsonRpcResponse> {
-        info!("Received message request - method: {}", request.method);
-        debug!("Message request details: {:?}", request);
+        State(state): State<Arc<Self>>,
+        Json(message): Json<ClientMessage>,
+    ) -> Json<ServerResponse> {
+        debug!("Message details: {:?}", message);
 
-        let response = match request.method.as_str() {
-            "initialize" => JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id: request.id,
-                result: Some(serde_json::json!({
-                    "serverInfo": {
-                        "name": "mcp-weather",
-                        "version": "0.1.0"
-                    },
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {
-                            "listChanged": false
+        match message {
+            ClientMessage::Request(request) => {
+                let id = request_id(&request).clone();
+                let response = handle_request(&state.service, request).await;
+
+                match response {
+                    Ok(response) => {
+                        if let Err(e) = state.tx.send(response.clone()) {
+                            warn!("Failed to broadcast response: {}", e);
+                        } else {
+                            debug!("Successfully broadcast response");
                         }
+
+                        Json(ServerResponse::Response(response))
                     }
-                })),
-                error: None,
-            },
-            "tools/list" => JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id: request.id,
-                result: Some(serde_json::json!({
-                    "tools": [
-                        {
-                            "name": "get_alerts",
-                            "description": "Get weather alerts for a US state",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "state": {
-                                        "type": "string",
-                                        "description": "Two-letter US state code (e.g. CA, NY)"
-                                    }
-                                },
-                                "required": ["state"]
-                            }
-                        },
-                        {
-                            "name": "get_forecast",
-                            "description": "Get weather forecast for a location",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "latitude": {
-                                        "type": "number",
-                                        "description": "Latitude of the location"
-                                    },
-                                    "longitude": {
-                                        "type": "number",
-                                        "description": "Longitude of the location"
-                                    }
-                                },
-                                "required": ["latitude", "longitude"]
-                            }
-                        }
-                    ]
-                })),
-                error: None,
-            },
-            method => {
-                if let Some(handler) = state.handlers.get(method) {
-                    let params = request.params.unwrap_or(Value::Null);
-                    handler(params).await
-                } else {
-                    JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: request.id,
-                        result: None,
-                        error: Some(JsonRpcError {
-                            code: -32601,
-                            message: format!("Method not found: {method}"),
+                    Err(error) => Json(ServerResponse::Error(mcp_schema::JSONRPCError {
+                        json_rpc: mcp_schema::JSONRPC_VERSION.to_string(),
+                        id,
+                        error: mcp_schema::RPCErrorDetail {
+                            code: error.code,
+                            message: error.message,
                             data: None,
-                        }),
-                    }
+                        },
+                    })),
                 }
             }
-        };
-
-        if let Err(e) = state.tx.send(JsonRpcMessage::Response(response.clone())) {
-            warn!("Failed to broadcast response: {}", e);
-        } else {
-            debug!("Successfully broadcast response");
+            ClientMessage::Notification(_) => Json(ServerResponse::None),
         }
-
-        Json(response)
     }
 }
 
-#[allow(dead_code)]
-pub struct McpHandler {
-    pub(crate) name: String,
-    pub(crate) handler: HandlerFn,
+fn request_id(request: &mcp_schema::ClientRequest) -> &mcp_schema::RequestId {
+    match request {
+        mcp_schema::ClientRequest::Initialize { id, .. } => id,
+        mcp_schema::ClientRequest::Ping { id, .. } => id,
+        mcp_schema::ClientRequest::ListResources { id, .. } => id,
+        mcp_schema::ClientRequest::ListResourceTemplates { id, .. } => id,
+        mcp_schema::ClientRequest::ReadResource { id, .. } => id,
+        mcp_schema::ClientRequest::Subscribe { id, .. } => id,
+        mcp_schema::ClientRequest::Unsubscribe { id, .. } => id,
+        mcp_schema::ClientRequest::ListPrompts { id, .. } => id,
+        mcp_schema::ClientRequest::GetPrompt { id, .. } => id,
+        mcp_schema::ClientRequest::ListTools { id, .. } => id,
+        mcp_schema::ClientRequest::CallTool { id, .. } => id,
+        mcp_schema::ClientRequest::SetLevel { id, .. } => id,
+        mcp_schema::ClientRequest::Complete { id, .. } => id,
+    }
 }
 
-impl McpHandler {
-    #[allow(dead_code)]
-    pub fn new<F>(name: &str, f: F) -> Self
-    where
-        F: Fn(Value) -> JsonRpcFuture + Send + Sync + 'static,
-    {
-        Self {
-            name: name.to_string(),
-            handler: Box::new(f),
-        }
+fn checked_version(json_rpc: String) -> Result<String, Error> {
+    let expected = mcp_schema::JSONRPC_VERSION;
+    if json_rpc == expected {
+        Ok(json_rpc)
+    } else {
+        Err(Error {
+            message: format!(
+                "Client is using JSON RPC version {json_rpc}, but server only supports version {expected}"
+            ),
+            code: 400,
+        })
     }
+}
+
+async fn handle_request(
+    service: &impl Service,
+    request: mcp_schema::ClientRequest,
+) -> Result<mcp_schema::JSONRPCResponse<mcp_schema::ServerResult>, Error> {
+    let response = match request {
+        mcp_schema::ClientRequest::Initialize {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .init(params)
+                .await
+                .map(mcp_schema::ServerResult::Initialize)?,
+        },
+        mcp_schema::ClientRequest::Ping {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .ping(params)
+                .await
+                .map(mcp_schema::ServerResult::Empty)?,
+        },
+        mcp_schema::ClientRequest::ListResources {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .list_resources(params)
+                .await
+                .map(mcp_schema::ServerResult::ListResources)?,
+        },
+        mcp_schema::ClientRequest::ListResourceTemplates {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .list_resource_templates(params)
+                .await
+                .map(mcp_schema::ServerResult::ListResourceTemplates)?,
+        },
+        mcp_schema::ClientRequest::ReadResource {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .read_resource(params)
+                .await
+                .map(mcp_schema::ServerResult::ReadResource)?,
+        },
+        mcp_schema::ClientRequest::Subscribe {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .subscribe(params)
+                .await
+                .map(mcp_schema::ServerResult::Empty)?,
+        },
+        mcp_schema::ClientRequest::Unsubscribe {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .unsubscribe(params)
+                .await
+                .map(mcp_schema::ServerResult::Empty)?,
+        },
+        mcp_schema::ClientRequest::ListPrompts {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .list_prompts(params)
+                .await
+                .map(mcp_schema::ServerResult::ListPrompts)?,
+        },
+        mcp_schema::ClientRequest::GetPrompt {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .get_prompt(params)
+                .await
+                .map(mcp_schema::ServerResult::GetPrompt)?,
+        },
+        mcp_schema::ClientRequest::ListTools {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .list_tools(params)
+                .await
+                .map(mcp_schema::ServerResult::ListTools)?,
+        },
+        mcp_schema::ClientRequest::CallTool {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .call_tool(params)
+                .await
+                .map(mcp_schema::ServerResult::CallTool)?,
+        },
+        mcp_schema::ClientRequest::SetLevel {
+            json_rpc,
+            id,
+            params,
+        } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: service
+                .set_level(params)
+                .await
+                .map(mcp_schema::ServerResult::Empty)?,
+        },
+        mcp_schema::ClientRequest::Complete { json_rpc, id, .. } => mcp_schema::JSONRPCResponse {
+            json_rpc: checked_version(json_rpc)?,
+            id,
+            result: mcp_schema::ServerResult::Empty(mcp_schema::EmptyResult {
+                meta: None,
+                extra: HashMap::new(),
+            }),
+        },
+    };
+
+    Ok(response)
 }
