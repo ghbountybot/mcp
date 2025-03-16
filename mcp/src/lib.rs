@@ -1,5 +1,3 @@
-#![feature(async_fn_traits, unboxed_closures)]
-
 pub mod basic_service;
 pub mod error;
 pub mod registry;

@@ -5,7 +5,6 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::AsyncFn;
 use std::pin::Pin;
 
 /// A registry for managing available prompts with shared state
@@ -23,12 +22,7 @@ impl<State: Send + Sync + 'static> PromptRegistry<State> {
         &mut self,
         name: impl Into<String>,
         description: impl Into<String>,
-        handler: impl AsyncFn(State, I) -> Result<O, Error>
-        + AsyncFnExt<State, I, O>
-        + Send
-        + Sync
-        + Copy
-        + 'static,
+        handler: impl AsyncFnExt<State, I, O> + Send + Sync + Copy + 'static,
     ) where
         I: DeserializeOwned + schemars::JsonSchema + Send + 'static,
         O: Serialize + 'static,

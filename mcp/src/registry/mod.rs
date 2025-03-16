@@ -7,7 +7,6 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::{AsyncFn, AsyncFnMut};
 use std::pin::Pin;
 
 pub use prompt::{Prompt, PromptRegistry};
@@ -23,20 +22,19 @@ pub trait HandlerFn<State, O> {
     ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send>>;
 }
 
-pub trait AsyncFnExt<State, I, O>: AsyncFn(State, I) -> Result<O, Error> {
+pub trait AsyncFnExt<State, I, O> {
     fn handler<'a>(self) -> impl HandlerFn<State, O> + Send + Sync + 'a
     where
         Self: 'a,
         I: 'a;
 }
 
-impl<State, I, O, F> AsyncFnExt<State, I, O> for F
+impl<State, I, O, Fut, F> AsyncFnExt<State, I, O> for F
 where
-    F: AsyncFn(State, I) -> Result<O, Error>,
-    Self: Send + Sync + Sized,
-    for<'b> <Self as AsyncFnMut<(State, I)>>::CallRefFuture<'b>: Send,
     State: Send + Sync + 'static,
     I: DeserializeOwned + Send,
+    F: Fn(State, I) -> Fut + Send + Sync + Sized,
+    Fut: Future<Output = Result<O, Error>> + Send + 'static,
 {
     fn handler<'a>(self) -> impl HandlerFn<State, O> + Send + Sync + 'a
     where
@@ -57,26 +55,27 @@ struct WrappedAsyncFn<F, I> {
     phantom: PhantomData<fn() -> I>,
 }
 
-impl<State, F, I, O> HandlerFn<State, O> for WrappedAsyncFn<F, I>
+impl<State, I, O, Fut, F> HandlerFn<State, O> for WrappedAsyncFn<F, I>
 where
     State: Send + Sync + 'static,
-    F: AsyncFn(State, I) -> Result<O, Error> + Sync,
-    for<'a> <F as AsyncFnMut<(State, I)>>::CallRefFuture<'a>: Send,
     I: DeserializeOwned + Send,
+    F: Fn(State, I) -> Fut + Send + Sync + Sized,
+    Fut: Future<Output = Result<O, Error>> + Send + 'static,
 {
     fn run(
         &self,
         state: State,
         args: HandlerArgs,
     ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send>> {
-        //        let input = serde_json::from_value(serde_json::Value::Object(args.into_iter().collect()))
-        //            .map_err(|e| Error {
-        //                message: format!("Failed to deserialize arguments: {e}"),
-        //                code: 400,
-        //            });
-        //
-        //        Box::pin(async move { (self.handler)(state, input?).await })
-        todo!()
+        let input = serde_json::from_value(serde_json::Value::Object(args.into_iter().collect()))
+            .map_err(|e| Error {
+                message: format!("Failed to deserialize arguments: {e}"),
+                code: 400,
+            });
+
+        let result = input.map(|input| (self.handler)(state, input));
+
+        Box::pin(async move { result?.await })
     }
 }
 
