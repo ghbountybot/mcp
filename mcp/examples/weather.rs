@@ -10,17 +10,7 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{fmt, prelude::*};
 
-use crate::rpc::McpImpl;
-
-mod basic_service;
-mod error;
-mod registry;
-mod rpc;
-mod service;
-
-pub use error::Error;
-pub use registry::{Prompt, PromptRegistry, Tool, ToolRegistry};
-pub use service::Service;
+use mcp::rpc::McpImpl;
 
 // TODO: Remove clone requirement
 #[derive(Copy, Clone)]
@@ -33,7 +23,7 @@ async fn main() {
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .init();
 
-    let service = basic_service::BasicService::new(State);
+    let service = mcp::BasicService::new(State);
 
     let state = McpImpl::new(service);
 
