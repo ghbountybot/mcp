@@ -16,14 +16,14 @@ pub use tool::{Tool, ToolRegistry};
 pub type HandlerArgs = HashMap<String, serde_json::Value>;
 
 pub trait HandlerFn<State, O> {
-    fn run<'a>(
-        &'a self,
-        state: &'a State,
+    fn run(
+        &self,
+        state: State,
         input: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send>>;
 }
 
-pub trait AsyncFnExt<State, I, O>: AsyncFn(&State, I) -> Result<O, Error> {
+pub trait AsyncFnExt<State, I, O>: AsyncFn(State, I) -> Result<O, Error> {
     fn handler<'a>(self) -> impl HandlerFn<State, O> + Send + Sync + 'a
     where
         Self: 'a,
@@ -32,10 +32,10 @@ pub trait AsyncFnExt<State, I, O>: AsyncFn(&State, I) -> Result<O, Error> {
 
 impl<State, I, O, F> AsyncFnExt<State, I, O> for F
 where
-    F: AsyncFn(&State, I) -> Result<O, Error>,
+    F: AsyncFn(State, I) -> Result<O, Error>,
     Self: Send + Sync + Sized,
-    for<'b, 'c> <Self as AsyncFnMut<(&'b State, I)>>::CallRefFuture<'c>: Send,
-    State: Sync,
+    for<'b> <Self as AsyncFnMut<(State, I)>>::CallRefFuture<'b>: Send,
+    State: Send + Sync + 'static,
     I: DeserializeOwned + Send,
 {
     fn handler<'a>(self) -> impl HandlerFn<State, O> + Send + Sync + 'a
@@ -59,23 +59,24 @@ struct WrappedAsyncFn<F, I> {
 
 impl<State, F, I, O> HandlerFn<State, O> for WrappedAsyncFn<F, I>
 where
-    State: Sync,
-    F: AsyncFn(&State, I) -> Result<O, Error> + Sync,
-    for<'a, 'b> <F as AsyncFnMut<(&'a State, I)>>::CallRefFuture<'b>: Send,
+    State: Send + Sync + 'static,
+    F: AsyncFn(State, I) -> Result<O, Error> + Sync,
+    for<'a> <F as AsyncFnMut<(State, I)>>::CallRefFuture<'a>: Send,
     I: DeserializeOwned + Send,
 {
-    fn run<'a>(
-        &'a self,
-        state: &'a State,
+    fn run(
+        &self,
+        state: State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send + 'a>> {
-        let input = serde_json::from_value(serde_json::Value::Object(args.into_iter().collect()))
-            .map_err(|e| Error {
-                message: format!("Failed to deserialize arguments: {e}"),
-                code: 400,
-            });
-
-        Box::pin(async move { (self.handler)(state, input?).await })
+    ) -> Pin<Box<dyn Future<Output = Result<O, Error>> + Send>> {
+        //        let input = serde_json::from_value(serde_json::Value::Object(args.into_iter().collect()))
+        //            .map_err(|e| Error {
+        //                message: format!("Failed to deserialize arguments: {e}"),
+        //                code: 400,
+        //            });
+        //
+        //        Box::pin(async move { (self.handler)(state, input?).await })
+        todo!()
     }
 }
 
@@ -93,7 +94,7 @@ impl<Handler> HandlerRegistry<Handler> {
     /// Call a handler by name with the given arguments
     pub async fn call<State, O>(
         &self,
-        state: &State,
+        state: State,
         name: &str,
         args: HashMap<String, serde_json::Value>,
     ) -> Result<O, Error>

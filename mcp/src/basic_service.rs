@@ -19,7 +19,7 @@ impl<State> BasicService<State> {
     }
 }
 
-impl<State: Sync> Service for BasicService<State> {
+impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
     fn init(
         &self,
         request: mcp_schema::InitializeParams,
@@ -121,7 +121,11 @@ impl<State: Sync> Service for BasicService<State> {
         &self,
         request: mcp_schema::GetPromptParams,
     ) -> impl Future<Output = Result<mcp_schema::GetPromptResult, Error>> + Send {
-        async move { self.prompt_registry.get_prompt(&self.state, &request).await }
+        async move {
+            self.prompt_registry
+                .get_prompt(self.state.clone(), &request)
+                .await
+        }
     }
 
     fn list_tools(
@@ -147,7 +151,11 @@ impl<State: Sync> Service for BasicService<State> {
         &self,
         request: mcp_schema::CallToolParams,
     ) -> impl Future<Output = Result<mcp_schema::CallToolResult, Error>> + Send {
-        async move { self.tool_registry.call_tool(&self.state, &request).await }
+        async move {
+            self.tool_registry
+                .call_tool(self.state.clone(), &request)
+                .await
+        }
     }
 
     fn set_level(

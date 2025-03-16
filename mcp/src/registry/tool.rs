@@ -13,7 +13,7 @@ pub struct ToolRegistry<State> {
     registry: HandlerRegistry<Tool<State>>,
 }
 
-impl<State: Sync> ToolRegistry<State> {
+impl<State: Send + Sync + 'static> ToolRegistry<State> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -22,7 +22,7 @@ impl<State: Sync> ToolRegistry<State> {
     pub fn register<I, O>(
         &mut self,
         name: impl Into<String>,
-        handler: impl AsyncFn(&State, I) -> Result<O, Error>
+        handler: impl AsyncFn(State, I) -> Result<O, Error>
         + AsyncFnExt<State, I, O>
         + Send
         + Sync
@@ -51,7 +51,7 @@ impl<State: Sync> ToolRegistry<State> {
     /// Call a tool by name with the given arguments
     pub async fn call_tool(
         &self,
-        state: &State,
+        state: State,
         request: &mcp_schema::CallToolParams,
     ) -> Result<mcp_schema::CallToolResult, Error> {
         self.registry
@@ -84,15 +84,15 @@ struct ToolHandler<F, O> {
 
 impl<State, F, O> HandlerFn<State, String> for ToolHandler<F, O>
 where
-    State: Sync,
+    State: Send + Sync + 'static,
     F: HandlerFn<State, O>,
-    O: Serialize,
+    O: Serialize + 'static,
 {
-    fn run<'a>(
-        &'a self,
-        state: &'a State,
+    fn run(
+        &self,
+        state: State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send>> {
         let result = self.handler.run(state, args);
         Box::pin(async move {
             let result = result.await?;
@@ -108,14 +108,15 @@ pub struct Tool<State> {
     handler: Box<dyn HandlerFn<State, String> + Send + Sync>,
 }
 
-impl<State: Sync> HandlerFn<State, mcp_schema::CallToolResult> for Tool<State> {
-    fn run<'a>(
-        &'a self,
-        state: &'a State,
+impl<State: Send + Sync + 'static> HandlerFn<State, mcp_schema::CallToolResult> for Tool<State> {
+    fn run(
+        &self,
+        state: State,
         args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::CallToolResult, Error>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::CallToolResult, Error>> + Send>> {
+        let result = self.handler.run(state, args);
         Box::pin(async move {
-            let result = self.handler.run(state, args).await?;
+            let result = result.await?;
             let result = serde_json::to_string(&result).unwrap();
             let result = mcp_schema::TextContent {
                 kind: "json".to_string(),
