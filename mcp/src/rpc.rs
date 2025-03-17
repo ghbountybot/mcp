@@ -6,13 +6,20 @@ use axum::{
 };
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    hash::{Hash, Hasher},
+    sync::{Arc, Mutex},
+};
 use tokio::sync::broadcast;
+use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub struct McpImpl<S> {
     tx: broadcast::Sender<ServerResponse>,
+    cancel: Mutex<HashMap<RequestId, oneshot::Sender<()>>>,
     service: S,
 }
 
@@ -31,12 +38,43 @@ pub enum ServerResponse {
     None,
 }
 
+#[derive(Debug, Clone)]
+struct RequestId(mcp_schema::RequestId);
+
+impl PartialEq for RequestId {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (mcp_schema::RequestId::String(x), mcp_schema::RequestId::String(y)) => x == y,
+            (mcp_schema::RequestId::Number(x), mcp_schema::RequestId::Number(y)) => x == y,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for RequestId {}
+
+impl Hash for RequestId {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        match &self.0 {
+            mcp_schema::RequestId::String(x) => x.hash(state),
+            mcp_schema::RequestId::Number(x) => x.hash(state),
+        }
+    }
+}
+
 impl<S: Service> McpImpl<S> {
     #[must_use]
     #[allow(dead_code)]
     pub fn new(service: S) -> Self {
         let (tx, _) = broadcast::channel(100);
-        Self { tx, service }
+        Self {
+            tx,
+            cancel: Mutex::new(HashMap::new()),
+            service,
+        }
     }
 
     #[allow(clippy::unused_async)]
@@ -78,14 +116,24 @@ impl<S: Service> McpImpl<S> {
 
         match message {
             ClientMessage::Request(request) => {
-                let id = request_id(&request).clone();
-                let response = handle_request(&state.service, request).await;
+                let id = RequestId(request_id(&request).clone());
+                let (cancel_sender, cancel_receiver) = oneshot::channel();
+                state
+                    .cancel
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), cancel_sender);
+                let response = tokio::select! {
+                    response = handle_request(&state.service, request) => response,
+                    _ = cancel_receiver => return Json(ServerResponse::None)
+                };
+                state.cancel.lock().unwrap().remove(&id);
 
                 let response = match response {
                     Ok(response) => ServerResponse::Response(response),
                     Err(error) => ServerResponse::Error(mcp_schema::JSONRPCError {
                         json_rpc: mcp_schema::JSONRPC_VERSION.to_string(),
-                        id,
+                        id: id.0,
                         error: mcp_schema::RPCErrorDetail {
                             code: error.code,
                             message: error.message,
@@ -102,7 +150,34 @@ impl<S: Service> McpImpl<S> {
 
                 Json(response)
             }
-            ClientMessage::Notification(_) => Json(ServerResponse::None),
+            ClientMessage::Notification(notification) => {
+                match notification {
+                    mcp_schema::ClientNotification::Cancelled { params, .. } => {
+                        let id = RequestId(params.request_id);
+                        match params.reason {
+                            Some(reason) => warn!(
+                                "client cancelled client request {id:?} with reason: {reason}"
+                            ),
+                            None => warn!(
+                                "client cancelled client request {id:?} with no reason provided"
+                            ),
+                        };
+                        if let Some(sender) = state.cancel.lock().unwrap().remove(&id) {
+                            if sender.send(()).is_err() {
+                                error!("cancellation receiver was dropped");
+                            }
+                        } else {
+                            // This may occur if the request finished on the server side and the
+                            // result has not yet been sent to the client. Therefore, this isn't treated as an error.
+                            warn!(
+                                "client attempted to cancel client request {id:?} but it is not in progress - this is likely harmless"
+                            )
+                        }
+                    }
+                    _ => {}
+                };
+                Json(ServerResponse::None)
+            }
         }
     }
 }
