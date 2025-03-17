@@ -132,7 +132,6 @@ impl<State> TryFrom<&Tool<State>> for mcp_schema::Tool {
 pub struct ToolBuilder<State> {
     name: Option<String>,
     description: Option<String>,
-    required_args: Vec<String>,
     schema: Option<serde_json::Value>,
     handler: Option<Box<dyn HandlerFn<State, String> + Send + Sync>>,
 }
@@ -149,11 +148,6 @@ impl<State: Send + Sync + 'static> ToolBuilder<State> {
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
-        self
-    }
-
-    pub fn required_arg(mut self, arg_name: impl Into<String>) -> Self {
-        self.required_args.push(arg_name.into());
         self
     }
 
@@ -194,7 +188,6 @@ impl<State> Default for ToolBuilder<State> {
         Self {
             name: None,
             description: None,
-            required_args: Vec::new(),
             schema: None,
             handler: None,
         }
