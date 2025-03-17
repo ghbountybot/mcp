@@ -96,7 +96,7 @@ impl<State: Send + Sync + 'static> HandlerFn<State, mcp_schema::CallToolResult> 
             let result = result.await?;
             let result = serde_json::to_string(&result).unwrap();
             let result = mcp_schema::TextContent {
-                kind: "json".to_string(),
+                kind: "text".to_string(),
                 text: result,
                 annotated: mcp_schema::Annotated {
                     annotations: None,
