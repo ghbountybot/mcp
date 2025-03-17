@@ -1,10 +1,8 @@
 use crate::Error;
 use crate::registry::{AsyncFnExt, HandlerArgs, HandlerFn, HandlerRegistry};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 
 /// A registry for managing available tools with shared state
@@ -47,36 +45,11 @@ impl<State> Default for ToolRegistry<State> {
     }
 }
 
-struct ToolHandler<F, O> {
-    handler: F,
-    phantom: PhantomData<fn() -> O>,
-}
-
-impl<State, F, O> HandlerFn<State, String> for ToolHandler<F, O>
-where
-    State: Send + Sync + 'static,
-    F: HandlerFn<State, O>,
-    O: Serialize + 'static,
-{
-    fn run(
-        &self,
-        state: State,
-        args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send>> {
-        let result = self.handler.run(state, args);
-        Box::pin(async move {
-            let result = result.await?;
-            let result = serde_json::to_string(&result).unwrap();
-            Ok(result)
-        })
-    }
-}
-
 pub struct Tool<State> {
     name: String,
     description: Option<String>,
     schema: serde_json::Value,
-    handler: Box<dyn HandlerFn<State, String> + Send + Sync>,
+    handler: Box<dyn HandlerFn<State, Vec<mcp_schema::PromptContent>> + Send + Sync>,
 }
 
 impl<State: Send + Sync + 'static> Tool<State> {
@@ -91,23 +64,13 @@ impl<State: Send + Sync + 'static> HandlerFn<State, mcp_schema::CallToolResult> 
         state: State,
         args: HandlerArgs,
     ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::CallToolResult, Error>> + Send>> {
-        let result = self.handler.run(state, args);
+        let content = self.handler.run(state, args);
         Box::pin(async move {
-            let result = result.await?;
-            let result = serde_json::to_string(&result).unwrap();
-            let result = mcp_schema::TextContent {
-                kind: "text".to_string(),
-                text: result,
-                annotated: mcp_schema::Annotated {
-                    annotations: None,
-                    extra: HashMap::new(),
-                },
-            };
+            let content = content.await?;
 
-            let result = mcp_schema::PromptContent::Text(result);
             Ok(mcp_schema::CallToolResult {
                 meta: None,
-                content: vec![result],
+                content,
                 is_error: Some(false),
                 extra: HashMap::new(),
             })
@@ -133,7 +96,7 @@ pub struct ToolBuilder<State> {
     name: Option<String>,
     description: Option<String>,
     schema: Option<serde_json::Value>,
-    handler: Option<Box<dyn HandlerFn<State, String> + Send + Sync>>,
+    handler: Option<Box<dyn HandlerFn<State, Vec<mcp_schema::PromptContent>> + Send + Sync>>,
 }
 
 impl<State: Send + Sync + 'static> ToolBuilder<State> {
@@ -151,19 +114,19 @@ impl<State: Send + Sync + 'static> ToolBuilder<State> {
         self
     }
 
-    pub fn handler<I, O>(
+    pub fn handler<I>(
         mut self,
-        handler: impl AsyncFnExt<State, I, O> + Send + Sync + Copy + 'static,
+        handler: impl AsyncFnExt<State, I, Vec<mcp_schema::PromptContent>>
+        + Send
+        + Sync
+        + Copy
+        + 'static,
     ) -> Self
     where
         I: DeserializeOwned + schemars::JsonSchema + Send + 'static,
-        O: Serialize + 'static,
     {
         self.schema = Some(serde_json::to_value(schemars::schema_for!(I)).unwrap());
-        self.handler = Some(Box::new(ToolHandler {
-            handler: handler.handler(),
-            phantom: PhantomData,
-        }));
+        self.handler = Some(Box::new(handler.handler()));
         self
     }
 
