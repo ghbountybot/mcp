@@ -13,7 +13,7 @@ use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
 pub struct McpImpl<S> {
-    tx: broadcast::Sender<mcp_schema::JSONRPCResponse<mcp_schema::ServerResult>>,
+    tx: broadcast::Sender<ServerResponse>,
     service: S,
 }
 
@@ -82,17 +82,9 @@ impl<S: Service> McpImpl<S> {
                 let id = request_id(&request).clone();
                 let response = handle_request(&state.service, request).await;
 
-                match response {
-                    Ok(response) => {
-                        if let Err(e) = state.tx.send(response.clone()) {
-                            warn!("Failed to broadcast response: {}", e);
-                        } else {
-                            debug!("Successfully broadcast response");
-                        }
-
-                        Json(ServerResponse::Response(response))
-                    }
-                    Err(error) => Json(ServerResponse::Error(mcp_schema::JSONRPCError {
+                let response = match response {
+                    Ok(response) => ServerResponse::Response(response),
+                    Err(error) => ServerResponse::Error(mcp_schema::JSONRPCError {
                         json_rpc: mcp_schema::JSONRPC_VERSION.to_string(),
                         id,
                         error: mcp_schema::RPCErrorDetail {
@@ -100,8 +92,16 @@ impl<S: Service> McpImpl<S> {
                             message: error.message,
                             data: None,
                         },
-                    })),
+                    }),
+                };
+
+                if let Err(e) = state.tx.send(response.clone()) {
+                    warn!("Failed to broadcast response: {}", e);
+                } else {
+                    debug!("Successfully broadcast response");
                 }
+
+                Json(response)
             }
             ClientMessage::Notification(_) => Json(ServerResponse::None),
         }
