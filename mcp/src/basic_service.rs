@@ -1,4 +1,4 @@
-use crate::{Error, Prompt, PromptRegistry, Service, Tool, ToolRegistry};
+use crate::{Error, PromptRegistry, Service, Tool, ToolRegistry};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -39,7 +39,7 @@ impl<State> BasicService<State> {
 impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
     fn init(
         &self,
-        request: mcp_schema::InitializeParams,
+        _request: mcp_schema::InitializeParams,
     ) -> impl Future<Output = Result<mcp_schema::InitializeResult, Error>> + Send {
         async move {
             // TODO: check for compatible MCP version
@@ -82,42 +82,42 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
 
     fn list_resources(
         &self,
-        request: mcp_schema::PaginatedParams,
+        _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListResourcesResult, Error>> + Send {
         async move { todo!() }
     }
 
     fn list_resource_templates(
         &self,
-        request: mcp_schema::PaginatedParams,
+        _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListResourceTemplatesResult, Error>> + Send {
         async move { todo!() }
     }
 
     fn read_resource(
         &self,
-        request: mcp_schema::ReadResourceParams,
+        _request: mcp_schema::ReadResourceParams,
     ) -> impl Future<Output = Result<mcp_schema::ReadResourceResult, Error>> + Send {
         async move { todo!() }
     }
 
     fn subscribe(
         &self,
-        request: mcp_schema::SubscribeParams,
+        _request: mcp_schema::SubscribeParams,
     ) -> impl Future<Output = Result<mcp_schema::EmptyResult, Error>> + Send {
         async move { todo!() }
     }
 
     fn unsubscribe(
         &self,
-        request: mcp_schema::UnsubscribeParams,
+        _request: mcp_schema::UnsubscribeParams,
     ) -> impl Future<Output = Result<mcp_schema::EmptyResult, Error>> + Send {
         async move { todo!() }
     }
 
     fn list_prompts(
         &self,
-        request: mcp_schema::PaginatedParams,
+        _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListPromptsResult, Error>> + Send {
         async move {
             let result = mcp_schema::ListPromptsResult {
@@ -146,7 +146,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
 
     fn list_tools(
         &self,
-        request: mcp_schema::PaginatedParams,
+        _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListToolsResult, Error>> + Send {
         async move {
             let result = mcp_schema::ListToolsResult {
@@ -175,7 +175,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
 
     fn set_level(
         &self,
-        request: mcp_schema::SetLevelParams,
+        _request: mcp_schema::SetLevelParams,
     ) -> impl Future<Output = Result<mcp_schema::EmptyResult, Error>> + Send {
         async move { todo!() }
     }

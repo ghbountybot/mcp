@@ -2,7 +2,6 @@ pub mod prompt;
 pub mod tool;
 
 use crate::Error;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::future::Future;
