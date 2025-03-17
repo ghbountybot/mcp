@@ -48,7 +48,9 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                 capabilities: mcp_schema::ServerCapabilities {
                     experimental: None,
                     logging: None,
-                    prompts: None,
+                    prompts: Some(mcp_schema::PromptsCapability {
+                        list_changed: Some(false),
+                    }),
                     resources: None,
                     tools: Some(mcp_schema::ToolsCapability {
                         list_changed: Some(false),

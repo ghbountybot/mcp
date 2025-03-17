@@ -1,10 +1,9 @@
 use crate::Error;
 use crate::registry::{AsyncFnExt, HandlerArgs, HandlerFn, HandlerRegistry};
-use serde::Serialize;
+use schemars::schema::{InstanceType, Schema, SingleOrVec};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 
 /// A registry for managing available prompts with shared state
@@ -17,35 +16,12 @@ impl<State: Send + Sync + 'static> PromptRegistry<State> {
         Self::default()
     }
 
-    /// Register a new prompt with the given name and handler
-    pub fn register<I, O>(
-        &mut self,
-        name: impl Into<String>,
-        description: impl Into<String>,
-        handler: impl AsyncFnExt<State, I, O> + Send + Sync + Copy + 'static,
-    ) where
-        I: DeserializeOwned + schemars::JsonSchema + Send + 'static,
-        O: Serialize + 'static,
-    {
-        let name = name.into();
-        let description = description.into();
-        let schema = serde_json::to_value(schemars::schema_for!(I)).unwrap();
-
-        self.registry.register(
-            name.clone(),
-            Prompt {
-                name,
-                description,
-                schema,
-                handler: Box::new(PromptHandler {
-                    handler: handler.handler(),
-                    phantom: PhantomData,
-                }),
-            },
-        );
+    /// Register a new tool with the given name and handler
+    pub fn register(&mut self, tool: Prompt<State>) {
+        self.registry.register(tool.name.clone(), tool);
     }
 
-    /// Gets a prompt by name with the given arguments
+    /// Call a tool by name with the given arguments
     pub fn get_prompt(
         &self,
         state: State,
@@ -57,10 +33,10 @@ impl<State: Send + Sync + 'static> PromptRegistry<State> {
             &request.name,
             request
                 .arguments
+                .unwrap_or_default()
                 .into_iter()
-                .flatten()
-                .map(|(key, value)| (key, serde_json::Value::String(value)))
-                .collect::<HashMap<_, _>>(),
+                .map(|(name, value)| (name, serde_json::Value::String(value)))
+                .collect(),
         )
     }
 
@@ -78,36 +54,17 @@ impl<State> Default for PromptRegistry<State> {
     }
 }
 
-struct PromptHandler<F, O> {
-    handler: F,
-    phantom: PhantomData<fn() -> O>,
-}
-
-impl<State, F, O> HandlerFn<State, String> for PromptHandler<F, O>
-where
-    State: Send + Sync + 'static,
-    F: HandlerFn<State, O>,
-    O: Serialize + 'static,
-{
-    fn run(
-        &self,
-        state: State,
-        args: HandlerArgs,
-    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send>> {
-        let result = self.handler.run(state, args);
-        Box::pin(async move {
-            let result = result.await?;
-            let result = serde_json::to_string(&result).unwrap();
-            Ok(result)
-        })
-    }
-}
-
 pub struct Prompt<State> {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) schema: serde_json::Value,
-    handler: Box<dyn HandlerFn<State, String> + Send + Sync>,
+    name: String,
+    description: Option<String>,
+    schema: Vec<mcp_schema::PromptArgument>,
+    handler: Box<dyn HandlerFn<State, Vec<mcp_schema::PromptMessage>> + Send + Sync>,
+}
+
+impl<State: Send + Sync + 'static> Prompt<State> {
+    pub fn builder() -> PromptBuilder<State> {
+        PromptBuilder::new()
+    }
 }
 
 impl<State: Send + Sync + 'static> HandlerFn<State, mcp_schema::GetPromptResult> for Prompt<State> {
@@ -117,28 +74,14 @@ impl<State: Send + Sync + 'static> HandlerFn<State, mcp_schema::GetPromptResult>
         args: HandlerArgs,
     ) -> Pin<Box<dyn Future<Output = Result<mcp_schema::GetPromptResult, Error>> + Send>> {
         let description = self.description.clone();
-        let result = self.handler.run(state, args);
+        let messages = self.handler.run(state, args);
         Box::pin(async move {
-            let result = result.await?;
-            let result = serde_json::to_string(&result).unwrap();
-            let result = mcp_schema::TextContent {
-                kind: "text".to_string(),
-                text: result,
-                annotated: mcp_schema::Annotated {
-                    annotations: None,
-                    extra: HashMap::new(),
-                },
-            };
-
-            let result = mcp_schema::PromptMessage {
-                content: mcp_schema::PromptContent::Text(result),
-                role: mcp_schema::Role::Assistant,
-            };
+            let messages = messages.await?;
 
             Ok(mcp_schema::GetPromptResult {
                 meta: None,
-                description: Some(description),
-                messages: vec![result],
+                description,
+                messages,
                 extra: HashMap::new(),
             })
         })
@@ -148,38 +91,32 @@ impl<State: Send + Sync + 'static> HandlerFn<State, mcp_schema::GetPromptResult>
 impl<State> TryFrom<&Prompt<State>> for mcp_schema::Prompt {
     type Error = serde_json::Error;
 
-    fn try_from(prompt: &Prompt<State>) -> Result<Self, Self::Error> {
+    fn try_from(tool: &Prompt<State>) -> Result<Self, Self::Error> {
         Ok(Self {
-            name: prompt.name.clone(),
-            description: Some(prompt.description.clone()),
-            arguments: serde_json::from_value(prompt.schema.clone())?,
+            description: tool.description.clone(),
+            arguments: Some(tool.schema.clone()),
+            name: tool.name.clone(),
             extra: HashMap::new(),
         })
     }
 }
 
-/// A builder for constructing a prompt with validation and metadata
-pub struct PromptBuilder {
-    name: String,
+/// A builder for constructing a tool with validation and metadata
+pub struct PromptBuilder<State> {
+    name: Option<String>,
     description: Option<String>,
-    required_args: Vec<String>,
-    handler: Option<
-        Box<
-            dyn Fn(
-                &HashMap<String, serde_json::Value>,
-            ) -> Result<mcp_schema::GetPromptResult, Error>,
-        >,
-    >,
+    schema: Option<Vec<mcp_schema::PromptArgument>>,
+    handler: Option<Box<dyn HandlerFn<State, Vec<mcp_schema::PromptMessage>> + Send + Sync>>,
 }
 
-impl PromptBuilder {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: None,
-            required_args: Vec::new(),
-            handler: None,
-        }
+impl<State: Send + Sync + 'static> PromptBuilder<State> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
@@ -187,39 +124,86 @@ impl PromptBuilder {
         self
     }
 
-    pub fn required_arg(mut self, arg_name: impl Into<String>) -> Self {
-        self.required_args.push(arg_name.into());
-        self
-    }
-
-    pub fn handler<F>(mut self, handler: F) -> Self
+    pub fn handler<I>(
+        mut self,
+        handler: impl AsyncFnExt<State, I, Vec<mcp_schema::PromptMessage>>
+        + Send
+        + Sync
+        + Copy
+        + 'static,
+    ) -> Self
     where
-        F: Fn(&HashMap<String, serde_json::Value>) -> Result<mcp_schema::GetPromptResult, Error>
-            + 'static,
+        I: DeserializeOwned + schemars::JsonSchema + Send + 'static,
     {
-        let required_args = self.required_args.clone();
-        self.handler = Some(Box::new(move |args| {
-            // Validate required arguments
-            for arg in &required_args {
-                if !args.contains_key(arg) {
-                    return Err(Error {
-                        message: format!("Missing required argument: {}", arg),
-                        code: 400,
-                    });
-                }
-            }
-            handler(args)
-        }));
+        self.schema = Some(
+            schemars::schema_for!(I)
+                .schema
+                .object
+                .map(|object| {
+                    object
+                        .properties
+                        .into_iter()
+                        .flat_map(|(name, schema)| match schema {
+                            Schema::Bool(_) => None,
+                            Schema::Object(object) => {
+                                let (valid, required) = match object.instance_type {
+                                    Some(SingleOrVec::Single(x)) => {
+                                        (*x == InstanceType::String, true)
+                                    }
+                                    Some(SingleOrVec::Vec(x)) => (
+                                        matches!(
+                                            x.as_slice(),
+                                            &[InstanceType::String, InstanceType::Null]
+                                        ),
+                                        false,
+                                    ),
+                                    _ => (false, false),
+                                };
+
+                                assert!(
+                                    valid,
+                                    "prompt parameter '{name}' must be String or Option<String>"
+                                );
+
+                                Some(mcp_schema::PromptArgument {
+                                    name,
+                                    description: None,
+                                    required: Some(required),
+                                    extra: HashMap::new(),
+                                })
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or(Vec::new()),
+        );
+        self.handler = Some(Box::new(handler.handler()));
         self
     }
 
-    // pub fn register(self, registry: &mut PromptRegistry) -> Result<(), Error> {
-    //     let handler = self.handler.ok_or_else(|| Error {
-    //         message: "Prompt handler not set".to_string(),
-    //         code: 500,
-    //     })?;
-    //
-    //     registry.register(self.name, handler);
-    //     Ok(())
-    // }
+    pub fn build(self) -> Result<Prompt<State>, Error> {
+        Ok(Prompt {
+            name: self.name.unwrap_or_else(|| "unnamed prompt".to_string()),
+            description: self.description,
+            schema: self.schema.ok_or_else(|| Error {
+                message: "missing handler input schema".to_string(),
+                code: 500,
+            })?,
+            handler: self.handler.ok_or_else(|| Error {
+                message: "missing handler".to_string(),
+                code: 500,
+            })?,
+        })
+    }
+}
+
+impl<State> Default for PromptBuilder<State> {
+    fn default() -> Self {
+        Self {
+            name: None,
+            description: None,
+            schema: None,
+            handler: None,
+        }
+    }
 }
