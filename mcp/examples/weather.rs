@@ -5,6 +5,10 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use rand::Rng;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -12,9 +16,43 @@ use tracing_subscriber::{fmt, prelude::*};
 
 use mcp::rpc::McpImpl;
 
-// TODO: Remove clone requirement
 #[derive(Copy, Clone)]
 struct State;
+
+#[derive(Deserialize, JsonSchema)]
+struct ForecastParams {
+    latitude: f32,
+    longitude: f32,
+    temperature_multiplier: Option<f32>,
+}
+
+async fn get_forecast(
+    _state: State,
+    params: ForecastParams,
+) -> Result<Vec<mcp_schema::PromptContent>, mcp::Error> {
+    let latitude = params.latitude;
+    let longitude = params.longitude;
+    let temperature =
+        rand::rng().random_range(-50.0..120.0) * params.temperature_multiplier.unwrap_or(1.0);
+    let description = if temperature < 50.0 {
+        "very cold".to_string()
+    } else {
+        "a bit warm".to_string()
+    };
+
+    Ok(vec![mcp_schema::PromptContent::Text(
+        mcp_schema::TextContent {
+            kind: "text".to_string(),
+            text: format!(
+                "The temperature at {latitude} {longitude} is {temperature} degrees - {description}"
+            ),
+            annotated: mcp_schema::Annotated {
+                annotations: None,
+                extra: HashMap::new(),
+            },
+        },
+    )])
+}
 
 #[tokio::main]
 async fn main() {
@@ -23,7 +61,20 @@ async fn main() {
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .init();
 
-    let service = mcp::BasicService::new(State);
+    let mut service = mcp::BasicService::new(State);
+
+    let forecast_tool = mcp::Tool::builder()
+        .name("get_forecast")
+        .description("Get weather forecast for a location")
+        .handler(get_forecast)
+        .build()
+        .unwrap();
+
+    service
+        .tool_registry_mut()
+        .get_mut()
+        .unwrap()
+        .register(forecast_tool);
 
     let state = McpImpl::new(service);
 
