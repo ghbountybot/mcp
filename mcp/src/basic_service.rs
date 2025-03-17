@@ -1,11 +1,12 @@
 use crate::{Error, Prompt, PromptRegistry, Service, Tool, ToolRegistry};
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub struct BasicService<State> {
     state: State,
     instructions: Option<String>,
-    tool_registry: ToolRegistry<State>,
-    prompt_registry: PromptRegistry<State>,
+    tool_registry: Mutex<ToolRegistry<State>>,
+    prompt_registry: Mutex<PromptRegistry<State>>,
 }
 
 impl<State> BasicService<State> {
@@ -13,9 +14,25 @@ impl<State> BasicService<State> {
         Self {
             state,
             instructions: None,
-            tool_registry: ToolRegistry::default(),
-            prompt_registry: PromptRegistry::default(),
+            tool_registry: Mutex::new(ToolRegistry::default()),
+            prompt_registry: Mutex::new(PromptRegistry::default()),
         }
+    }
+
+    pub fn tool_registry(&self) -> &Mutex<ToolRegistry<State>> {
+        &self.tool_registry
+    }
+
+    pub fn tool_registry_mut(&mut self) -> &mut Mutex<ToolRegistry<State>> {
+        &mut self.tool_registry
+    }
+
+    pub fn prompt_registry(&self) -> &Mutex<PromptRegistry<State>> {
+        &self.prompt_registry
+    }
+
+    pub fn prompt_registry_mut(&mut self) -> &mut Mutex<PromptRegistry<State>> {
+        &mut self.prompt_registry
     }
 }
 
@@ -108,6 +125,8 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                 next_cursor: None,
                 prompts: self
                     .prompt_registry
+                    .lock()
+                    .unwrap()
                     .prompts_iter()
                     .map(|(_, prompt)| mcp_schema::Prompt::try_from(prompt))
                     .collect::<Result<Vec<_>, _>>()?,
@@ -121,11 +140,8 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         &self,
         request: mcp_schema::GetPromptParams,
     ) -> impl Future<Output = Result<mcp_schema::GetPromptResult, Error>> + Send {
-        async move {
-            self.prompt_registry
-                .get_prompt(self.state.clone(), &request)
-                .await
-        }
+        let result = self.prompt_registry.lock().unwrap();
+        result.get_prompt(self.state.clone(), request)
     }
 
     fn list_tools(
@@ -138,6 +154,8 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                 next_cursor: None,
                 tools: self
                     .tool_registry
+                    .lock()
+                    .unwrap()
                     .tools_iter()
                     .map(|(_, tool): (_, &Tool<State>)| mcp_schema::Tool::try_from(tool))
                     .collect::<Result<Vec<_>, _>>()?,
@@ -151,11 +169,8 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         &self,
         request: mcp_schema::CallToolParams,
     ) -> impl Future<Output = Result<mcp_schema::CallToolResult, Error>> + Send {
-        async move {
-            self.tool_registry
-                .call_tool(self.state.clone(), &request)
-                .await
-        }
+        let result = self.tool_registry.lock().unwrap();
+        result.call_tool(self.state.clone(), request)
     }
 
     fn set_level(

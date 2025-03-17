@@ -46,23 +46,22 @@ impl<State: Send + Sync + 'static> PromptRegistry<State> {
     }
 
     /// Gets a prompt by name with the given arguments
-    pub async fn get_prompt(
+    pub fn get_prompt(
         &self,
         state: State,
-        request: &mcp_schema::GetPromptParams,
-    ) -> Result<mcp_schema::GetPromptResult, Error> {
-        self.registry
-            .call(
-                state,
-                &request.name,
-                request
-                    .arguments
-                    .iter()
-                    .flatten()
-                    .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
-                    .collect::<HashMap<_, _>>(),
-            )
-            .await
+        request: mcp_schema::GetPromptParams,
+    ) -> impl Future<Output = Result<mcp_schema::GetPromptResult, Error>> + use<State> + Send + 'static
+    {
+        self.registry.call(
+            state,
+            &request.name,
+            request
+                .arguments
+                .into_iter()
+                .flatten()
+                .map(|(key, value)| (key, serde_json::Value::String(value)))
+                .collect::<HashMap<_, _>>(),
+        )
     }
 
     /// Iterate through all registered prompts

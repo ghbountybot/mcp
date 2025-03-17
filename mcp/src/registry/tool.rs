@@ -18,43 +18,19 @@ impl<State: Send + Sync + 'static> ToolRegistry<State> {
     }
 
     /// Register a new tool with the given name and handler
-    pub fn register<I, O>(
-        &mut self,
-        name: impl Into<String>,
-        handler: impl AsyncFnExt<State, I, O> + Send + Sync + Copy + 'static,
-    ) where
-        I: DeserializeOwned + schemars::JsonSchema + Send + 'static,
-        O: Serialize + 'static,
-    {
-        let name = name.into();
-        let schema = serde_json::to_value(schemars::schema_for!(I)).unwrap();
-
-        self.registry.register(
-            name.clone(),
-            Tool {
-                name,
-                schema,
-                handler: Box::new(ToolHandler {
-                    handler: handler.handler(),
-                    phantom: PhantomData,
-                }),
-            },
-        );
+    pub fn register(&mut self, tool: Tool<State>) {
+        self.registry.register(tool.name.clone(), tool);
     }
 
     /// Call a tool by name with the given arguments
-    pub async fn call_tool(
+    pub fn call_tool(
         &self,
         state: State,
-        request: &mcp_schema::CallToolParams,
-    ) -> Result<mcp_schema::CallToolResult, Error> {
+        request: mcp_schema::CallToolParams,
+    ) -> impl Future<Output = Result<mcp_schema::CallToolResult, Error>> + use<State> + Send + 'static
+    {
         self.registry
-            .call(
-                state,
-                &request.name,
-                request.arguments.clone().unwrap_or_default(),
-            )
-            .await
+            .call(state, &request.name, request.arguments.unwrap_or_default())
     }
 
     /// Iterate through all registered tools
@@ -97,9 +73,16 @@ where
 }
 
 pub struct Tool<State> {
-    pub(crate) name: String,
-    pub(crate) schema: serde_json::Value,
+    name: String,
+    description: Option<String>,
+    schema: serde_json::Value,
     handler: Box<dyn HandlerFn<State, String> + Send + Sync>,
+}
+
+impl<State: Send + Sync + 'static> Tool<State> {
+    pub fn builder() -> ToolBuilder<State> {
+        ToolBuilder::new()
+    }
 }
 
 impl<State: Send + Sync + 'static> HandlerFn<State, mcp_schema::CallToolResult> for Tool<State> {
@@ -137,7 +120,7 @@ impl<State> TryFrom<&Tool<State>> for mcp_schema::Tool {
 
     fn try_from(tool: &Tool<State>) -> Result<Self, Self::Error> {
         Ok(Self {
-            description: todo!(),
+            description: tool.description.clone(),
             input_schema: serde_json::from_value(tool.schema.clone())?,
             name: tool.name.clone(),
             extra: HashMap::new(),
@@ -146,27 +129,22 @@ impl<State> TryFrom<&Tool<State>> for mcp_schema::Tool {
 }
 
 /// A builder for constructing a tool with validation and metadata
-pub struct ToolBuilder {
-    name: String,
+pub struct ToolBuilder<State> {
+    name: Option<String>,
     description: Option<String>,
     required_args: Vec<String>,
-    handler: Option<
-        Box<
-            dyn Fn(
-                &HashMap<String, serde_json::Value>,
-            ) -> Result<mcp_schema::CallToolResult, Error>,
-        >,
-    >,
+    schema: Option<serde_json::Value>,
+    handler: Option<Box<dyn HandlerFn<State, String> + Send + Sync>>,
 }
 
-impl ToolBuilder {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: None,
-            required_args: Vec::new(),
-            handler: None,
-        }
+impl<State: Send + Sync + 'static> ToolBuilder<State> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
@@ -179,34 +157,46 @@ impl ToolBuilder {
         self
     }
 
-    pub fn handler<F>(mut self, handler: F) -> Self
+    pub fn handler<I, O>(
+        mut self,
+        handler: impl AsyncFnExt<State, I, O> + Send + Sync + Copy + 'static,
+    ) -> Self
     where
-        F: Fn(&HashMap<String, serde_json::Value>) -> Result<mcp_schema::CallToolResult, Error>
-            + 'static,
+        I: DeserializeOwned + schemars::JsonSchema + Send + 'static,
+        O: Serialize + 'static,
     {
-        let required_args = self.required_args.clone();
-        self.handler = Some(Box::new(move |args| {
-            // Validate required arguments
-            for arg in &required_args {
-                if !args.contains_key(arg) {
-                    return Err(Error {
-                        message: format!("Missing required argument: {}", arg),
-                        code: 400,
-                    });
-                }
-            }
-            handler(args)
+        self.schema = Some(serde_json::to_value(schemars::schema_for!(I)).unwrap());
+        self.handler = Some(Box::new(ToolHandler {
+            handler: handler.handler(),
+            phantom: PhantomData,
         }));
         self
     }
 
-    // pub fn register(self, registry: &mut ToolRegistry) -> Result<(), Error> {
-    //     let handler = self.handler.ok_or_else(|| Error {
-    //         message: "Tool handler not set".to_string(),
-    //         code: 500,
-    //     })?;
-    //
-    //     registry.register(self.name, handler);
-    //     Ok(())
-    // }
+    pub fn build(self) -> Result<Tool<State>, Error> {
+        Ok(Tool {
+            name: self.name.unwrap_or_else(|| "unnamed tool".to_string()),
+            description: self.description,
+            schema: self.schema.ok_or_else(|| Error {
+                message: "missing handler input schema".to_string(),
+                code: 500,
+            })?,
+            handler: self.handler.ok_or_else(|| Error {
+                message: "missing handler".to_string(),
+                code: 500,
+            })?,
+        })
+    }
+}
+
+impl<State> Default for ToolBuilder<State> {
+    fn default() -> Self {
+        Self {
+            name: None,
+            description: None,
+            required_args: Vec::new(),
+            schema: None,
+            handler: None,
+        }
+    }
 }

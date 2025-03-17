@@ -33,6 +33,7 @@ impl<State, I, O, Fut, F> AsyncFnExt<State, I, O> for F
 where
     State: Send + Sync + 'static,
     I: DeserializeOwned + Send,
+    O: 'static,
     F: Fn(State, I) -> Fut + Send + Sync + Sized,
     Fut: Future<Output = Result<O, Error>> + Send + 'static,
 {
@@ -59,6 +60,7 @@ impl<State, I, O, Fut, F> HandlerFn<State, O> for WrappedAsyncFn<F, I>
 where
     State: Send + Sync + 'static,
     I: DeserializeOwned + Send,
+    O: 'static,
     F: Fn(State, I) -> Fut + Send + Sync + Sized,
     Fut: Future<Output = Result<O, Error>> + Send + 'static,
 {
@@ -91,21 +93,27 @@ impl<Handler> HandlerRegistry<Handler> {
     }
 
     /// Call a handler by name with the given arguments
-    pub async fn call<State, O>(
+    pub fn call<State, O>(
         &self,
         state: State,
         name: &str,
         args: HashMap<String, serde_json::Value>,
-    ) -> Result<O, Error>
+    ) -> impl Future<Output = Result<O, Error>> + use<Handler, State, O> + Send + 'static
     where
+        State: Sync,
+        O: 'static,
         Handler: HandlerFn<State, O>,
     {
-        let handler = self.handlers.get(name).ok_or_else(|| Error {
-            message: format!("Handler '{}' not found", name),
-            code: 404,
-        })?;
+        let handler = self
+            .handlers
+            .get(name)
+            .ok_or_else(|| Error {
+                message: format!("Handler '{}' not found", name),
+                code: 404,
+            })
+            .map(|handler| handler.run(state, args));
 
-        handler.run(state, args).await
+        Box::pin(async move { handler?.await })
     }
 
     /// Iterate through all registered handlers
