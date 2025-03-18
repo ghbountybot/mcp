@@ -11,6 +11,7 @@ pub struct ToolRegistry<State> {
 }
 
 impl<State: Send + Sync + 'static> ToolRegistry<State> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -40,7 +41,7 @@ impl<State: Send + Sync + 'static> ToolRegistry<State> {
 impl<State> Default for ToolRegistry<State> {
     fn default() -> Self {
         Self {
-            registry: Default::default(),
+            registry: HandlerRegistry::default(),
         }
     }
 }
@@ -53,6 +54,7 @@ pub struct Tool<State> {
 }
 
 impl<State: Send + Sync + 'static> Tool<State> {
+    #[must_use]
     pub fn builder() -> ToolBuilder<State> {
         ToolBuilder::new()
     }
@@ -100,20 +102,24 @@ pub struct ToolBuilder<State> {
 }
 
 impl<State: Send + Sync + 'static> ToolBuilder<State> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
+    #[must_use]
     pub fn handler<I>(
         mut self,
         handler: impl AsyncFnExt<State, I, Vec<mcp_schema::PromptContent>>
@@ -130,6 +136,10 @@ impl<State: Send + Sync + 'static> ToolBuilder<State> {
         self
     }
 
+    /// Builds a tool.
+    ///
+    /// # Errors
+    /// If the name or handler was not set, this will error.
     pub fn build(self) -> Result<Tool<State>, Error> {
         Ok(Tool {
             name: self.name.unwrap_or_else(|| "unnamed tool".to_string()),

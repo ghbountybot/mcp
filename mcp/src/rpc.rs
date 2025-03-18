@@ -32,6 +32,7 @@ pub enum ClientMessage {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum ServerResponse {
     Response(mcp_schema::JSONRPCResponse<mcp_schema::ServerResult>),
     Notification(mcp_schema::ServerNotification),
@@ -66,7 +67,7 @@ impl Hash for RequestId {
     }
 }
 
-impl<S: Service> McpImpl<S> {
+impl<S: Service + Send + Sync> McpImpl<S> {
     #[must_use]
     #[allow(dead_code)]
     pub fn new(mut service: S) -> Self {
@@ -161,52 +162,47 @@ impl<S: Service> McpImpl<S> {
                 Json(response)
             }
             ClientMessage::Notification(notification) => {
-                match notification {
-                    mcp_schema::ClientNotification::Cancelled { params, .. } => {
-                        let id = RequestId(params.request_id);
-                        match params.reason {
-                            Some(reason) => warn!(
-                                "client cancelled client request {id:?} with reason: {reason}"
-                            ),
-                            None => warn!(
-                                "client cancelled client request {id:?} with no reason provided"
-                            ),
-                        };
-                        if let Some(sender) = state.cancel.lock().unwrap().remove(&id) {
-                            if sender.send(()).is_err() {
-                                error!("cancellation receiver was dropped");
-                            }
-                        } else {
-                            // This may occur if the request finished on the server side and the
-                            // result has not yet been sent to the client. Therefore, this isn't treated as an error.
-                            warn!(
-                                "client attempted to cancel client request {id:?} but it is not in progress - this is likely harmless"
-                            )
-                        }
+                if let mcp_schema::ClientNotification::Cancelled { params, .. } = notification {
+                    let id = RequestId(params.request_id);
+                    if let Some(reason) = params.reason {
+                        warn!("client cancelled client request {id:?} with reason: {reason}");
+                    } else {
+                        warn!("client cancelled client request {id:?} with no reason provided");
                     }
-                    _ => {}
-                };
+                    let sender = state.cancel.lock().unwrap().remove(&id);
+                    if let Some(sender) = sender {
+                        if sender.send(()).is_err() {
+                            error!("cancellation receiver was dropped");
+                        }
+                    } else {
+                        // This may occur if the request finished on the server side and the
+                        // result has not yet been sent to the client. Therefore, this isn't treated as an error.
+                        warn!(
+                            "client attempted to cancel client request {id:?} but it is not in progress - this is likely harmless"
+                        );
+                    }
+                }
                 Json(ServerResponse::None)
             }
         }
     }
 }
 
-fn request_id(request: &mcp_schema::ClientRequest) -> &mcp_schema::RequestId {
+const fn request_id(request: &mcp_schema::ClientRequest) -> &mcp_schema::RequestId {
     match request {
-        mcp_schema::ClientRequest::Initialize { id, .. } => id,
-        mcp_schema::ClientRequest::Ping { id, .. } => id,
-        mcp_schema::ClientRequest::ListResources { id, .. } => id,
-        mcp_schema::ClientRequest::ListResourceTemplates { id, .. } => id,
-        mcp_schema::ClientRequest::ReadResource { id, .. } => id,
-        mcp_schema::ClientRequest::Subscribe { id, .. } => id,
-        mcp_schema::ClientRequest::Unsubscribe { id, .. } => id,
-        mcp_schema::ClientRequest::ListPrompts { id, .. } => id,
-        mcp_schema::ClientRequest::GetPrompt { id, .. } => id,
-        mcp_schema::ClientRequest::ListTools { id, .. } => id,
-        mcp_schema::ClientRequest::CallTool { id, .. } => id,
-        mcp_schema::ClientRequest::SetLevel { id, .. } => id,
-        mcp_schema::ClientRequest::Complete { id, .. } => id,
+        mcp_schema::ClientRequest::Initialize { id, .. }
+        | mcp_schema::ClientRequest::Ping { id, .. }
+        | mcp_schema::ClientRequest::ListResources { id, .. }
+        | mcp_schema::ClientRequest::ListResourceTemplates { id, .. }
+        | mcp_schema::ClientRequest::ReadResource { id, .. }
+        | mcp_schema::ClientRequest::Subscribe { id, .. }
+        | mcp_schema::ClientRequest::Unsubscribe { id, .. }
+        | mcp_schema::ClientRequest::ListPrompts { id, .. }
+        | mcp_schema::ClientRequest::GetPrompt { id, .. }
+        | mcp_schema::ClientRequest::ListTools { id, .. }
+        | mcp_schema::ClientRequest::CallTool { id, .. }
+        | mcp_schema::ClientRequest::SetLevel { id, .. }
+        | mcp_schema::ClientRequest::Complete { id, .. } => id,
     }
 }
 
@@ -224,8 +220,9 @@ fn checked_version(json_rpc: String) -> Result<String, Error> {
     }
 }
 
+#[expect(clippy::too_many_lines)]
 async fn handle_request(
-    service: &impl Service,
+    service: &(impl Service + Send + Sync),
     request: mcp_schema::ClientRequest,
 ) -> Result<mcp_schema::JSONRPCResponse<mcp_schema::ServerResult>, Error> {
     let response = match request {

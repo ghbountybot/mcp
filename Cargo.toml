@@ -7,3 +7,5 @@ license = "MIT"
 all = "deny"
 pedantic = "deny"
 nursery = "deny"
+manual_async_fn = { level = "allow", priority = 1 }
+missing_panics_doc = { level = "allow", priority = 1 }

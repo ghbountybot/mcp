@@ -109,7 +109,7 @@ impl<Handler> HandlerRegistry<Handler> {
             .handlers
             .get(name)
             .ok_or_else(|| Error {
-                message: format!("Handler '{}' not found", name),
+                message: format!("Handler '{name}' not found"),
                 code: 404,
             })
             .map(|handler| handler.run(state, args));

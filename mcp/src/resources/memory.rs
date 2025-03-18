@@ -11,15 +11,18 @@ pub struct MemoryResource {
 }
 
 impl MemoryResource {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
+    #[expect(clippy::missing_const_for_fn)]
     pub fn get(&self) -> &[mcp_schema::ResourceContents] {
         &self.contents
     }
 
-    pub async fn set(&mut self, contents: Vec<mcp_schema::ResourceContents>) {
+    pub fn set(&mut self, contents: Vec<mcp_schema::ResourceContents>) {
         self.contents = contents;
 
         self.change.notify_waiters();

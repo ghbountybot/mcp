@@ -28,22 +28,23 @@ impl<State> BasicService<State> {
         }
     }
 
-    pub fn tool_registry(&self) -> &Mutex<ToolRegistry<State>> {
+    pub const fn tool_registry(&self) -> &Mutex<ToolRegistry<State>> {
         &self.tool_registry
     }
 
-    pub fn tool_registry_mut(&mut self) -> &mut Mutex<ToolRegistry<State>> {
+    pub const fn tool_registry_mut(&mut self) -> &mut Mutex<ToolRegistry<State>> {
         &mut self.tool_registry
     }
 
-    pub fn prompt_registry(&self) -> &Mutex<PromptRegistry<State>> {
+    pub const fn prompt_registry(&self) -> &Mutex<PromptRegistry<State>> {
         &self.prompt_registry
     }
 
-    pub fn prompt_registry_mut(&mut self) -> &mut Mutex<PromptRegistry<State>> {
+    pub const fn prompt_registry_mut(&mut self) -> &mut Mutex<PromptRegistry<State>> {
         &mut self.prompt_registry
     }
 
+    #[expect(clippy::missing_const_for_fn)]
     pub fn resource_registry(&self) -> &Mutex<ResourceRegistry<State>> {
         &self.resource_registry
     }
@@ -118,7 +119,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                     .lock()
                     .unwrap()
                     .fixed_resources_iter()
-                    .map(|resource| mcp_schema::Resource::try_from(resource))
+                    .map(mcp_schema::Resource::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 extra: HashMap::new(),
             })
@@ -138,7 +139,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                     .lock()
                     .unwrap()
                     .fixed_resources_iter()
-                    .map(|resource| mcp_schema::ResourceTemplate::try_from(resource))
+                    .map(mcp_schema::ResourceTemplate::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 extra: HashMap::new(),
             })
@@ -177,7 +178,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                         error!("resource subscription failed: {error:?}");
                         return;
                     }
-                };
+                }
                 (notification_handler)(mcp_schema::ServerNotification::ResourceUpdated {
                     json_rpc: mcp_schema::JSONRPC_VERSION.to_string(),
                     params: mcp_schema::ResourceUpdatedParams {

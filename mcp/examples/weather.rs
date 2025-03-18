@@ -44,7 +44,7 @@ impl<State: Send + Sync + 'static> Source<State> for Resource {
         let inner = self.inner.clone().lock_owned();
         Box::pin(async move {
             let future = inner.await.wait_for_change(state, uri);
-            future.await
+            future.await;
         })
     }
 }
@@ -101,8 +101,7 @@ async fn get_forecast(
                 mime_type: None,
                 text,
             },
-        )])
-        .await;
+        )]);
 
     Ok(vec![mcp_schema::PromptContent::Text(
         mcp_schema::TextContent {
@@ -136,9 +135,8 @@ async fn get_forecast_prompt(
             text: if let Some(city) = params.city {
                 format!("You are a meteorologist with access to weather forecasts from {city}.")
             } else {
-                format!(
-                    "You are a meteorologist with access to weather forecasts from any location"
-                )
+                "You are a meteorologist with access to weather forecasts from any location"
+                    .to_string()
             },
             annotated: mcp_schema::Annotated {
                 annotations: None,

@@ -12,6 +12,7 @@ pub struct PromptRegistry<State> {
 }
 
 impl<State: Send + Sync + 'static> PromptRegistry<State> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -49,7 +50,7 @@ impl<State: Send + Sync + 'static> PromptRegistry<State> {
 impl<State> Default for PromptRegistry<State> {
     fn default() -> Self {
         Self {
-            registry: Default::default(),
+            registry: HandlerRegistry::default(),
         }
     }
 }
@@ -62,6 +63,7 @@ pub struct Prompt<State> {
 }
 
 impl<State: Send + Sync + 'static> Prompt<State> {
+    #[must_use]
     pub fn builder() -> PromptBuilder<State> {
         PromptBuilder::new()
     }
@@ -110,20 +112,27 @@ pub struct PromptBuilder<State> {
 }
 
 impl<State: Send + Sync + 'static> PromptBuilder<State> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
+    /// # Panics
+    /// This function will panic if the handler parameters include types that are not [`String`] and
+    /// [`Option<String>`]
+    #[must_use]
     pub fn handler<I>(
         mut self,
         handler: impl AsyncFnExt<State, I, Vec<mcp_schema::PromptMessage>>
@@ -139,11 +148,11 @@ impl<State: Send + Sync + 'static> PromptBuilder<State> {
             schemars::schema_for!(I)
                 .schema
                 .object
-                .map(|object| {
+                .map_or(Vec::new(), |object| {
                     object
                         .properties
                         .into_iter()
-                        .flat_map(|(name, schema)| match schema {
+                        .filter_map(|(name, schema)| match schema {
                             Schema::Bool(_) => None,
                             Schema::Object(object) => {
                                 let (valid, required) = match object.instance_type {
@@ -174,13 +183,16 @@ impl<State: Send + Sync + 'static> PromptBuilder<State> {
                             }
                         })
                         .collect::<Vec<_>>()
-                })
-                .unwrap_or(Vec::new()),
+                }),
         );
         self.handler = Some(Box::new(handler.handler()));
         self
     }
 
+    /// Builds a prompt.
+    ///
+    /// # Errors
+    /// If the handler was not set, this will error.
     pub fn build(self) -> Result<Prompt<State>, Error> {
         Ok(Prompt {
             name: self.name.unwrap_or_else(|| "unnamed prompt".to_string()),

@@ -14,6 +14,7 @@ pub struct ResourceRegistry<State> {
 }
 
 impl<State: Send + Sync + 'static> ResourceRegistry<State> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -27,9 +28,13 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
             ResourceUri::Template(_) => {
                 self.templated_resources.push(resource);
             }
-        };
+        }
     }
 
+    /// Gets a resource from a uri.
+    ///
+    /// # Errors
+    /// If the uri does not match any of the registered resources, this will error.
     pub fn get_resource(&self, uri: &str) -> Result<&Resource<State>, Error> {
         self.fixed_resources
             .get(uri)
@@ -38,7 +43,7 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
                     let ResourceUri::Template(template) = &resource.uri else {
                         panic!("resource with non-templated uri is in templated_resources")
                     };
-                    template_uri_matches(&template, uri)
+                    template_uri_matches(template, uri)
                 })
             })
             .ok_or_else(|| Error {
@@ -48,6 +53,10 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
     }
 
     /// Read a resource from a URI
+    ///
+    /// # Errors
+    /// If the uri does not match any of the registered resources or the underlying source
+    /// encounters an error, this will error.
     pub fn read_resource(
         &self,
         state: State,
@@ -70,6 +79,9 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
     }
 
     /// Waits for a change in a resource from a URI
+    ///
+    /// # Errors
+    /// If the uri does not match any of the registered resources, this will error.
     pub fn wait_for_change(
         &self,
         state: State,
@@ -80,7 +92,7 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
 
     /// Iterate through all registered fixed resources
     pub fn fixed_resources_iter(&self) -> impl Iterator<Item = &Resource<State>> {
-        self.fixed_resources.iter().map(|(_, resource)| resource)
+        self.fixed_resources.values()
     }
 
     /// Iterate through all registered resource templates
@@ -128,6 +140,7 @@ pub struct Resource<State> {
 }
 
 impl<State: Send + Sync + 'static> Resource<State> {
+    #[must_use]
     pub fn builder() -> ResourceBuilder<State> {
         ResourceBuilder::new()
     }
@@ -180,45 +193,57 @@ pub struct ResourceBuilder<State> {
 }
 
 impl<State: Send + Sync + 'static> ResourceBuilder<State> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn fixed_uri(mut self, name: impl Into<String>) -> Self {
         self.uri = Some(ResourceUri::Fixed(name.into()));
         self
     }
 
+    #[must_use]
     pub fn templated_uri(mut self, name: impl Into<String>) -> Self {
         self.uri = Some(ResourceUri::Template(name.into()));
         self
     }
 
+    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
+    #[must_use]
     pub fn mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
         self
     }
 
+    #[must_use]
     pub fn annotations(mut self, annotations: mcp_schema::Annotations) -> Self {
         self.annotated.annotations = Some(annotations);
         self
     }
 
+    #[must_use]
     pub fn source(mut self, source: Box<dyn Source<State> + Send>) -> Self {
         self.source = Some(source);
         self
     }
 
+    /// Builds a resource.
+    ///
+    /// # Errors
+    /// If the uri or source was not set, this will error.
     pub fn build(self) -> Result<Resource<State>, Error> {
         Ok(Resource {
             uri: self.uri.ok_or_else(|| Error {
