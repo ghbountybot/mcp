@@ -210,7 +210,7 @@ async fn main() {
     let state = Arc::new(McpImpl::new(service));
 
     if USE_STDIO {
-        state.serve_over_stdio().await;
+        state.serve_over_stdio().await.unwrap();
     } else {
         let app = Router::new()
             .route("/api/message", post(McpImpl::message_handler))
