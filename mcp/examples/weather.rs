@@ -202,7 +202,7 @@ async fn main() {
 
     {
         let mut resource_registry = service.resource_registry().lock().unwrap();
-        resource_registry.register(resource);
+        resource_registry.register_fixed(resource);
     }
 
     let state = McpImpl::new(service);

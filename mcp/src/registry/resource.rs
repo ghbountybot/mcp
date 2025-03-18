@@ -9,8 +9,8 @@ fn template_uri_matches(_template: &str, _uri: &str) -> bool {
 
 /// A registry for managing available resources with shared state
 pub struct ResourceRegistry<State> {
-    fixed_resources: HashMap<String, Resource<State>>,
-    templated_resources: Vec<Resource<State>>,
+    fixed_resources: HashMap<String, Resource<State, FixedResourceUri>>,
+    template_resources: Vec<Resource<State, TemplateResourceUri>>,
 }
 
 impl<State: Send + Sync + 'static> ResourceRegistry<State> {
@@ -19,32 +19,30 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
         Self::default()
     }
 
-    /// Register a new resource
-    pub fn register(&mut self, resource: Resource<State>) {
-        match &resource.uri {
-            ResourceUri::Fixed(uri) => {
-                self.fixed_resources.insert(uri.clone(), resource);
-            }
-            ResourceUri::Template(_) => {
-                self.templated_resources.push(resource);
-            }
-        }
+    /// Register a new resource with a fixed uri
+    pub fn register_fixed(&mut self, resource: Resource<State, FixedResourceUri>) {
+        self.fixed_resources
+            .insert(resource.uri.0.clone(), resource);
     }
 
-    /// Gets a resource from a uri.
+    /// Register a new resource with a template uri
+    pub fn register_template(&mut self, resource: Resource<State, TemplateResourceUri>) {
+        self.template_resources.push(resource);
+    }
+
+    /// Gets a source from a uri.
     ///
     /// # Errors
     /// If the uri does not match any of the registered resources, this will error.
-    pub fn get_resource(&self, uri: &str) -> Result<&Resource<State>, Error> {
+    pub fn get_source(&self, uri: &str) -> Result<&(dyn Source<State> + Send), Error> {
         self.fixed_resources
             .get(uri)
+            .map(|resource| resource.source.as_ref())
             .or_else(|| {
-                self.templated_resources.iter().find(|resource| {
-                    let ResourceUri::Template(template) = &resource.uri else {
-                        panic!("resource with non-templated uri is in templated_resources")
-                    };
-                    template_uri_matches(template, uri)
-                })
+                self.template_resources
+                    .iter()
+                    .find(|resource| template_uri_matches(&resource.uri.0, uri))
+                    .map(|resource| resource.source.as_ref())
             })
             .ok_or_else(|| Error {
                 message: format!("Resource at uri '{uri}' not found"),
@@ -63,9 +61,7 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
         uri: String,
     ) -> impl Future<Output = Result<mcp_schema::ReadResourceResult, Error>> + use<State> + Send + 'static
     {
-        let contents = self
-            .get_resource(&uri)
-            .map(|resource| resource.source.read(state, uri));
+        let contents = self.get_source(&uri).map(|source| source.read(state, uri));
 
         async move {
             let contents = contents?.await?;
@@ -87,17 +83,19 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
         state: State,
         uri: String,
     ) -> Result<impl Future<Output = ()> + use<State> + Send + 'static, Error> {
-        Ok(self.get_resource(&uri)?.source.wait_for_change(state, uri))
+        Ok(self.get_source(&uri)?.wait_for_change(state, uri))
     }
 
     /// Iterate through all registered fixed resources
-    pub fn fixed_resources_iter(&self) -> impl Iterator<Item = &Resource<State>> {
+    pub fn fixed_resources_iter(&self) -> impl Iterator<Item = &Resource<State, FixedResourceUri>> {
         self.fixed_resources.values()
     }
 
     /// Iterate through all registered resource templates
-    pub fn templated_resource_iter(&self) -> impl Iterator<Item = &Resource<State>> {
-        self.templated_resources.iter()
+    pub fn template_resource_iter(
+        &self,
+    ) -> impl Iterator<Item = &Resource<State, TemplateResourceUri>> {
+        self.template_resources.iter()
     }
 }
 
@@ -105,7 +103,7 @@ impl<State> Default for ResourceRegistry<State> {
     fn default() -> Self {
         Self {
             fixed_resources: HashMap::new(),
-            templated_resources: Vec::new(),
+            template_resources: Vec::new(),
         }
     }
 }
@@ -124,14 +122,14 @@ pub trait Source<State> {
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub enum ResourceUri {
-    Fixed(String),
-    Template(String),
-}
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct FixedResourceUri(pub String);
 
-pub struct Resource<State> {
-    uri: ResourceUri,
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TemplateResourceUri(pub String);
+
+pub struct Resource<State, Uri> {
+    uri: Uri,
     name: String,
     description: Option<String>,
     mime_type: Option<String>,
@@ -139,23 +137,19 @@ pub struct Resource<State> {
     source: Box<dyn Source<State> + Send>,
 }
 
-impl<State: Send + Sync + 'static> Resource<State> {
+impl<State: Send + Sync + 'static, Uri> Resource<State, Uri> {
     #[must_use]
-    pub fn builder() -> ResourceBuilder<State> {
+    pub fn builder() -> ResourceBuilder<State, Uri> {
         ResourceBuilder::new()
     }
 }
 
-impl<State> TryFrom<&Resource<State>> for mcp_schema::Resource {
+impl<State> TryFrom<&Resource<State, FixedResourceUri>> for mcp_schema::Resource {
     type Error = serde_json::Error;
 
-    fn try_from(resource: &Resource<State>) -> Result<Self, Self::Error> {
-        let ResourceUri::Fixed(uri) = resource.uri.clone() else {
-            todo!()
-        };
-
+    fn try_from(resource: &Resource<State, FixedResourceUri>) -> Result<Self, Self::Error> {
         Ok(Self {
-            uri,
+            uri: resource.uri.0.clone(),
             name: resource.name.clone(),
             description: resource.description.clone(),
             mime_type: resource.mime_type.clone(),
@@ -164,16 +158,12 @@ impl<State> TryFrom<&Resource<State>> for mcp_schema::Resource {
     }
 }
 
-impl<State> TryFrom<&Resource<State>> for mcp_schema::ResourceTemplate {
+impl<State> TryFrom<&Resource<State, TemplateResourceUri>> for mcp_schema::ResourceTemplate {
     type Error = serde_json::Error;
 
-    fn try_from(resource: &Resource<State>) -> Result<Self, Self::Error> {
-        let ResourceUri::Template(uri_template) = resource.uri.clone() else {
-            todo!()
-        };
-
+    fn try_from(resource: &Resource<State, TemplateResourceUri>) -> Result<Self, Self::Error> {
         Ok(Self {
-            uri_template,
+            uri_template: resource.uri.0.clone(),
             name: resource.name.clone(),
             description: resource.description.clone(),
             mime_type: resource.mime_type.clone(),
@@ -183,8 +173,8 @@ impl<State> TryFrom<&Resource<State>> for mcp_schema::ResourceTemplate {
 }
 
 /// A builder for constructing a resource with validation and metadata
-pub struct ResourceBuilder<State> {
-    uri: Option<ResourceUri>,
+pub struct ResourceBuilder<State, Uri> {
+    uri: Option<Uri>,
     name: Option<String>,
     description: Option<String>,
     mime_type: Option<String>,
@@ -192,22 +182,10 @@ pub struct ResourceBuilder<State> {
     source: Option<Box<dyn Source<State> + Send>>,
 }
 
-impl<State: Send + Sync + 'static> ResourceBuilder<State> {
+impl<State: Send + Sync + 'static, Uri> ResourceBuilder<State, Uri> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    #[must_use]
-    pub fn fixed_uri(mut self, name: impl Into<String>) -> Self {
-        self.uri = Some(ResourceUri::Fixed(name.into()));
-        self
-    }
-
-    #[must_use]
-    pub fn templated_uri(mut self, name: impl Into<String>) -> Self {
-        self.uri = Some(ResourceUri::Template(name.into()));
-        self
     }
 
     #[must_use]
@@ -244,7 +222,7 @@ impl<State: Send + Sync + 'static> ResourceBuilder<State> {
     ///
     /// # Errors
     /// If the uri or source was not set, this will error.
-    pub fn build(self) -> Result<Resource<State>, Error> {
+    pub fn build(self) -> Result<Resource<State, Uri>, Error> {
         Ok(Resource {
             uri: self.uri.ok_or_else(|| Error {
                 message: "missing uri".to_string(),
@@ -262,7 +240,23 @@ impl<State: Send + Sync + 'static> ResourceBuilder<State> {
     }
 }
 
-impl<State> Default for ResourceBuilder<State> {
+impl<State> ResourceBuilder<State, FixedResourceUri> {
+    #[must_use]
+    pub fn fixed_uri(mut self, name: impl Into<String>) -> Self {
+        self.uri = Some(FixedResourceUri(name.into()));
+        self
+    }
+}
+
+impl<State> ResourceBuilder<State, TemplateResourceUri> {
+    #[must_use]
+    pub fn template_uri(mut self, name: impl Into<String>) -> Self {
+        self.uri = Some(TemplateResourceUri(name.into()));
+        self
+    }
+}
+
+impl<State, Uri> Default for ResourceBuilder<State, Uri> {
     fn default() -> Self {
         Self {
             uri: None,

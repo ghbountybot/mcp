@@ -144,7 +144,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                     .resource_registry
                     .lock()
                     .unwrap()
-                    .fixed_resources_iter()
+                    .template_resource_iter()
                     .map(mcp_schema::ResourceTemplate::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 extra: HashMap::new(),
