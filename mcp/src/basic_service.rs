@@ -6,6 +6,10 @@ use tracing::error;
 
 pub struct BasicService<State> {
     state: State,
+
+    name: String,
+    version: String,
+
     instructions: Option<String>,
     tool_registry: Mutex<ToolRegistry<State>>,
     prompt_registry: Mutex<PromptRegistry<State>>,
@@ -16,9 +20,11 @@ pub struct BasicService<State> {
 }
 
 impl<State> BasicService<State> {
-    pub fn new(state: State) -> Self {
+    pub fn new(state: State, name: String, version: String) -> Self {
         Self {
             state,
+            name,
+            version,
             instructions: None,
             tool_registry: Mutex::new(ToolRegistry::default()),
             prompt_registry: Mutex::new(PromptRegistry::default()),
@@ -85,8 +91,8 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                 meta: None,
                 protocol_version: mcp_schema::LATEST_PROTOCOL_VERSION.to_string(),
                 server_info: mcp_schema::Implementation {
-                    name: "BasicServer".to_string(),
-                    version: "0.1.0".to_string(),
+                    name: self.name.clone(),
+                    version: self.version.clone(),
                     extra: HashMap::new(),
                 },
                 extra: HashMap::new(),

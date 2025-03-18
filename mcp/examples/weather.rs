@@ -155,10 +155,14 @@ async fn main() {
 
     let resource = Resource::default();
 
-    let mut service = mcp::BasicService::new(Arc::new(std::sync::Mutex::new(State {
-        resource: resource.clone(),
-        history: Vec::new(),
-    })));
+    let mut service = mcp::BasicService::new(
+        Arc::new(std::sync::Mutex::new(State {
+            resource: resource.clone(),
+            history: Vec::new(),
+        })),
+        "weather".to_string(),
+        "0.1.0".to_string(),
+    );
 
     let forecast_tool = mcp::Tool::builder()
         .name("get_forecast")
