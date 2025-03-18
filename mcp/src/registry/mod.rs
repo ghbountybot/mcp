@@ -1,4 +1,5 @@
 pub mod prompt;
+pub mod resource;
 pub mod tool;
 
 use crate::Error;
@@ -9,6 +10,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 
 pub use prompt::{Prompt, PromptRegistry};
+pub use resource::{Resource, ResourceRegistry};
 pub use tool::{Tool, ToolRegistry};
 
 pub type HandlerArgs = HashMap<String, serde_json::Value>;

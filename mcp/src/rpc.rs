@@ -34,6 +34,7 @@ pub enum ClientMessage {
 #[serde(untagged)]
 pub enum ServerResponse {
     Response(mcp_schema::JSONRPCResponse<mcp_schema::ServerResult>),
+    Notification(mcp_schema::ServerNotification),
     Error(mcp_schema::JSONRPCError),
     None,
 }
@@ -68,8 +69,17 @@ impl Hash for RequestId {
 impl<S: Service> McpImpl<S> {
     #[must_use]
     #[allow(dead_code)]
-    pub fn new(service: S) -> Self {
+    pub fn new(mut service: S) -> Self {
         let (tx, _) = broadcast::channel(100);
+
+        let tx_clone = tx.clone();
+        service.set_notification_handler(Box::new(move |notification| {
+            if let Err(e) = tx_clone.send(ServerResponse::Notification(notification)) {
+                warn!("Failed to broadcast response: {}", e);
+            } else {
+                debug!("Successfully broadcast response");
+            }
+        }));
         Self {
             tx,
             cancel: Mutex::new(HashMap::new()),

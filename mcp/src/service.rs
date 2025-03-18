@@ -1,6 +1,11 @@
 use crate::Error;
 
 pub trait Service {
+    fn set_notification_handler(
+        &mut self,
+        handler: Box<dyn Fn(mcp_schema::ServerNotification) + Send + Sync>,
+    );
+
     fn init(
         &self,
         request: mcp_schema::InitializeParams,

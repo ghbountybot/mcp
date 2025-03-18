@@ -1,12 +1,18 @@
-use crate::{Error, PromptRegistry, Service, Tool, ToolRegistry};
+use crate::{Error, PromptRegistry, ResourceRegistry, Service, Tool, ToolRegistry};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tokio::task::JoinHandle;
+use tracing::error;
 
 pub struct BasicService<State> {
     state: State,
     instructions: Option<String>,
     tool_registry: Mutex<ToolRegistry<State>>,
     prompt_registry: Mutex<PromptRegistry<State>>,
+    resource_registry: Arc<Mutex<ResourceRegistry<State>>>,
+
+    notification_handler: Option<Arc<dyn Fn(mcp_schema::ServerNotification) + Send + Sync>>,
+    resource_subscriptions: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
 impl<State> BasicService<State> {
@@ -16,6 +22,9 @@ impl<State> BasicService<State> {
             instructions: None,
             tool_registry: Mutex::new(ToolRegistry::default()),
             prompt_registry: Mutex::new(PromptRegistry::default()),
+            resource_registry: Arc::new(Mutex::new(ResourceRegistry::default())),
+            notification_handler: None,
+            resource_subscriptions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -34,9 +43,20 @@ impl<State> BasicService<State> {
     pub fn prompt_registry_mut(&mut self) -> &mut Mutex<PromptRegistry<State>> {
         &mut self.prompt_registry
     }
+
+    pub fn resource_registry(&self) -> &Mutex<ResourceRegistry<State>> {
+        &self.resource_registry
+    }
 }
 
 impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
+    fn set_notification_handler(
+        &mut self,
+        handler: Box<dyn Fn(mcp_schema::ServerNotification) + Send + Sync>,
+    ) {
+        self.notification_handler = Some(handler.into());
+    }
+
     fn init(
         &self,
         _request: mcp_schema::InitializeParams,
@@ -51,7 +71,10 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
                     prompts: Some(mcp_schema::PromptsCapability {
                         list_changed: Some(false),
                     }),
-                    resources: None,
+                    resources: Some(mcp_schema::ResourcesCapability {
+                        subscribe: Some(true),
+                        list_changed: Some(false),
+                    }),
                     tools: Some(mcp_schema::ToolsCapability {
                         list_changed: Some(false),
                     }),
@@ -86,35 +109,110 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         &self,
         _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListResourcesResult, Error>> + Send {
-        async move { todo!() }
+        async move {
+            Ok(mcp_schema::ListResourcesResult {
+                meta: None,
+                next_cursor: None,
+                resources: self
+                    .resource_registry
+                    .lock()
+                    .unwrap()
+                    .fixed_resources_iter()
+                    .map(|resource| mcp_schema::Resource::try_from(resource))
+                    .collect::<Result<Vec<_>, _>>()?,
+                extra: HashMap::new(),
+            })
+        }
     }
 
     fn list_resource_templates(
         &self,
         _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListResourceTemplatesResult, Error>> + Send {
-        async move { todo!() }
+        async move {
+            Ok(mcp_schema::ListResourceTemplatesResult {
+                meta: None,
+                next_cursor: None,
+                resource_templates: self
+                    .resource_registry
+                    .lock()
+                    .unwrap()
+                    .fixed_resources_iter()
+                    .map(|resource| mcp_schema::ResourceTemplate::try_from(resource))
+                    .collect::<Result<Vec<_>, _>>()?,
+                extra: HashMap::new(),
+            })
+        }
     }
 
     fn read_resource(
         &self,
-        _request: mcp_schema::ReadResourceParams,
+        request: mcp_schema::ReadResourceParams,
     ) -> impl Future<Output = Result<mcp_schema::ReadResourceResult, Error>> + Send {
-        async move { todo!() }
+        let result = self.resource_registry.lock().unwrap();
+        result.read_resource(self.state.clone(), request.uri)
     }
 
     fn subscribe(
         &self,
-        _request: mcp_schema::SubscribeParams,
+        request: mcp_schema::SubscribeParams,
     ) -> impl Future<Output = Result<mcp_schema::EmptyResult, Error>> + Send {
-        async move { todo!() }
+        let notification_handler = self
+            .notification_handler
+            .clone()
+            .expect("service notification handler must be set");
+        let resource_registry = self.resource_registry.clone();
+        let state = self.state.clone();
+        let uri = request.uri;
+        let uri_clone = uri.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let future = resource_registry
+                    .lock()
+                    .unwrap()
+                    .wait_for_change(state.clone(), uri_clone.clone());
+                match future {
+                    Ok(future) => future.await,
+                    Err(error) => {
+                        error!("resource subscription failed: {error:?}");
+                        return;
+                    }
+                };
+                (notification_handler)(mcp_schema::ServerNotification::ResourceUpdated {
+                    json_rpc: mcp_schema::JSONRPC_VERSION.to_string(),
+                    params: mcp_schema::ResourceUpdatedParams {
+                        uri: uri_clone.clone(),
+                        extra: HashMap::new(),
+                    },
+                });
+            }
+        });
+        self.resource_subscriptions
+            .lock()
+            .unwrap()
+            .insert(uri, handle);
+        async move {
+            Ok(mcp_schema::EmptyResult {
+                meta: None,
+                extra: HashMap::new(),
+            })
+        }
     }
 
     fn unsubscribe(
         &self,
-        _request: mcp_schema::UnsubscribeParams,
+        request: mcp_schema::UnsubscribeParams,
     ) -> impl Future<Output = Result<mcp_schema::EmptyResult, Error>> + Send {
-        async move { todo!() }
+        self.resource_subscriptions
+            .lock()
+            .unwrap()
+            .remove(&request.uri);
+        async move {
+            Ok(mcp_schema::EmptyResult {
+                meta: None,
+                extra: HashMap::new(),
+            })
+        }
     }
 
     fn list_prompts(
