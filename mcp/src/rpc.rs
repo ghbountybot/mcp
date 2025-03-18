@@ -12,6 +12,7 @@ use std::{
     hash::{Hash, Hasher},
     sync::{Arc, Mutex},
 };
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
@@ -67,7 +68,7 @@ impl Hash for RequestId {
     }
 }
 
-impl<S: Service + Send + Sync> McpImpl<S> {
+impl<S: Service + Send + Sync + 'static> McpImpl<S> {
     #[must_use]
     #[allow(dead_code)]
     pub fn new(mut service: S) -> Self {
@@ -85,6 +86,65 @@ impl<S: Service + Send + Sync> McpImpl<S> {
             tx,
             cancel: Mutex::new(HashMap::new()),
             service,
+        }
+    }
+
+    /// # Errors
+    /// An error will occur if an I/O error occurs in stdio or stdin.
+    pub async fn serve_over_stdio(self: Arc<Self>) -> std::io::Result<()> {
+        self.serve_over(tokio::io::stdin(), tokio::io::stdout())
+            .await
+    }
+
+    /// # Errors
+    /// An error will occur if an I/O error occurs in the input or output.
+    pub async fn serve_over(
+        self: Arc<Self>,
+        input: impl AsyncRead + Unpin,
+        mut output: impl AsyncWrite + Unpin,
+    ) -> std::io::Result<()> {
+        let mut input = BufReader::new(input).lines();
+        let mut rx = self.tx.subscribe();
+        let mut read_enabled = true;
+
+        loop {
+            tokio::select! {
+                msg = input.next_line(), if read_enabled => {
+                    let Some(msg) = &msg? else {
+                        // The end of the input was reached
+                        read_enabled = false;
+                        continue;
+                    };
+
+                    match serde_json::from_str(msg) {
+                        Ok(msg) => {
+                            tokio::spawn(Self::message_handler(State(self.clone()), Json(msg)));
+                        },
+                        Err(e) => {
+                            warn!("Error deserializing message: {}", e);
+                        }
+                    }
+                },
+                msg = rx.recv() => {
+                    match msg {
+                        Ok(msg) => {
+                            match serde_json::to_string(&msg) {
+                                Ok(msg) => {
+                                    output.write_all(msg.as_bytes()).await?;
+                                    output.write_all(b"\n").await?;
+                                },
+                                Err(e) => {
+                                    warn!("Error serializing message: {}", e);
+                                }
+                            }
+
+                        },
+                        Err(e) => {
+                            warn!("Error receiving message: {}", e);
+                        }
+                    }
+                }
+            }
         }
     }
 

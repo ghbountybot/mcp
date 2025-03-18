@@ -17,6 +17,8 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{fmt, prelude::*};
 
+const USE_STDIO: bool = true;
+
 #[derive(Clone, Default)]
 struct Resource {
     inner: Arc<tokio::sync::Mutex<mcp::resources::MemoryResource>>,
@@ -149,7 +151,7 @@ async fn get_forecast_prompt(
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(std::io::stderr))
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .init();
 
@@ -205,17 +207,21 @@ async fn main() {
         resource_registry.register_fixed(resource);
     }
 
-    let state = McpImpl::new(service);
+    let state = Arc::new(McpImpl::new(service));
 
-    let app = Router::new()
-        .route("/api/message", post(McpImpl::message_handler))
-        .route("/api/events", get(McpImpl::sse_handler))
-        .layer(CorsLayer::permissive())
-        .with_state(Arc::new(state));
+    if USE_STDIO {
+        state.serve_over_stdio().await;
+    } else {
+        let app = Router::new()
+            .route("/api/message", post(McpImpl::message_handler))
+            .route("/api/events", get(McpImpl::sse_handler))
+            .layer(CorsLayer::permissive())
+            .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    tracing::info!("listening on {}", addr);
-    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
-        .await
-        .unwrap();
+        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+        tracing::info!("listening on {}", addr);
+        axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
+            .await
+            .unwrap();
+    }
 }
