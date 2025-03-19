@@ -5,7 +5,6 @@ use crate::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
-use tracing::error;
 
 pub struct BasicService<State> {
     state: Option<State>,
@@ -24,7 +23,14 @@ pub struct BasicService<State> {
 
 impl BasicService<()> {}
 
+impl<State> Default for BasicService<State> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<State> BasicService<State> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: None,
@@ -39,16 +45,19 @@ impl<State> BasicService<State> {
         }
     }
 
+    #[must_use]
     pub fn state(mut self, state: State) -> Self {
         self.state = Some(state);
         self
     }
 
+    #[must_use]
     pub fn version(mut self, version: String) -> Self {
         self.version = version;
         self
     }
 
+    #[must_use]
     pub fn name(mut self, name: String) -> Self {
         self.name = name;
         self
@@ -84,7 +93,7 @@ impl<State> BasicService<State> {
         &mut self.prompt_registry
     }
 
-    pub fn resource_registry(&self) -> &ResourceRegistry<State> {
+    pub const fn resource_registry(&self) -> &ResourceRegistry<State> {
         &self.resource_registry
     }
 
@@ -92,6 +101,7 @@ impl<State> BasicService<State> {
         &mut self.resource_registry
     }
 
+    #[must_use]
     pub fn fixed_resource(mut self, resource: Resource<State, FixedResourceUri>) -> Self {
         let registry = self.resource_registry_mut();
         registry.register_fixed(resource);
@@ -185,18 +195,28 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         &self,
         _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListResourceTemplatesResult, Error>> + Send {
-        let result = mcp_schema::ListResourceTemplatesResult {
-            meta: None,
-            next_cursor: None,
-            resource_templates: self
+        let result = || {
+            let resource_templates: Result<Vec<_>, serde_json::Error> = self
                 .resource_registry
                 .template_resource_iter()
                 .map(mcp_schema::ResourceTemplate::try_from)
-                .collect::<Result<Vec<_>, _>>()?,
-            extra: HashMap::new(),
+                .collect();
+
+            let resource_templates = resource_templates?;
+
+            let result = mcp_schema::ListResourceTemplatesResult {
+                meta: None,
+                next_cursor: None,
+                resource_templates,
+                extra: HashMap::new(),
+            };
+
+            Ok::<_, serde_json::Error>(result)
         };
 
-        async move { Ok(result) }
+        let result = result();
+
+        async move { Ok(result?) }
     }
 
     fn read_resource(
@@ -204,7 +224,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         request: mcp_schema::ReadResourceParams,
     ) -> impl Future<Output = Result<mcp_schema::ReadResourceResult, Error>> + Send {
         let result = &self.resource_registry;
-        result.read_resource(self.state.clone(), request.uri)
+        result.read_resource(self.state.clone().expect("state must be set"), request.uri)
     }
 
     fn subscribe(
@@ -215,38 +235,46 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
             .notification_handler
             .clone()
             .expect("service notification handler must be set");
-        let resource_registry = &self.resource_registry;
-        let state = self.state.clone();
+        let state = self.state.clone().expect("state must be set");
         let uri = request.uri;
-        let uri_clone = uri.clone();
-        let handle = tokio::spawn(async move {
-            loop {
-                let future = resource_registry.wait_for_change(state.clone(), uri_clone.clone());
-                match future {
-                    Ok(future) => future.await,
-                    Err(error) => {
-                        error!("resource subscription failed: {error:?}");
-                        return;
+        let source = self.resource_registry.get_source(&uri);
+        let mut error = None;
+        match source {
+            Ok(source) => {
+                let uri_clone = uri.clone();
+                let handle = tokio::spawn(async move {
+                    loop {
+                        source
+                            .wait_for_change_erased(state.clone(), uri.clone())
+                            .await;
+                        (notification_handler)(mcp_schema::ServerNotification::ResourceUpdated {
+                            json_rpc: mcp_schema::JSONRPC_VERSION.to_string(),
+                            params: mcp_schema::ResourceUpdatedParams {
+                                uri: uri.clone(),
+                                extra: HashMap::new(),
+                            },
+                        });
                     }
-                }
-                (notification_handler)(mcp_schema::ServerNotification::ResourceUpdated {
-                    json_rpc: mcp_schema::JSONRPC_VERSION.to_string(),
-                    params: mcp_schema::ResourceUpdatedParams {
-                        uri: uri_clone.clone(),
-                        extra: HashMap::new(),
-                    },
                 });
+                self.resource_subscriptions
+                    .lock()
+                    .unwrap()
+                    .insert(uri_clone, handle);
             }
-        });
-        self.resource_subscriptions
-            .lock()
-            .unwrap()
-            .insert(uri, handle);
+            Err(e) => {
+                error = Some(e);
+            }
+        }
         async move {
-            Ok(mcp_schema::EmptyResult {
-                meta: None,
-                extra: HashMap::new(),
-            })
+            error.map_or_else(
+                || {
+                    Ok(mcp_schema::EmptyResult {
+                        meta: None,
+                        extra: HashMap::new(),
+                    })
+                },
+                Err,
+            )
         }
     }
 
@@ -294,22 +322,23 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         request: mcp_schema::GetPromptParams,
     ) -> impl Future<Output = Result<mcp_schema::GetPromptResult, Error>> + Send {
         let result = &self.prompt_registry;
-        result.get_prompt(self.state.clone(), request)
+        result.get_prompt(self.state.clone().expect("state must be set"), request)
     }
 
     fn list_tools(
         &self,
         _request: mcp_schema::PaginatedParams,
     ) -> impl Future<Output = Result<mcp_schema::ListToolsResult, Error>> + Send {
+        let tools = self
+            .tool_registry
+            .tools_iter()
+            .map(|(_, tool): (_, &Tool<State>)| mcp_schema::Tool::try_from(tool))
+            .collect::<Result<Vec<_>, _>>();
         async move {
             let result = mcp_schema::ListToolsResult {
                 meta: None,
                 next_cursor: None,
-                tools: self
-                    .tool_registry
-                    .tools_iter()
-                    .map(|(_, tool): (_, &Tool<State>)| mcp_schema::Tool::try_from(tool))
-                    .collect::<Result<Vec<_>, _>>()?,
+                tools: tools?,
                 extra: HashMap::new(),
             };
             Ok(result)
@@ -321,7 +350,7 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         request: mcp_schema::CallToolParams,
     ) -> impl Future<Output = Result<mcp_schema::CallToolResult, Error>> + Send {
         let result = &self.tool_registry;
-        result.call_tool(self.state.clone(), request)
+        result.call_tool(self.state.clone().expect("state must be set"), request)
     }
 
     fn set_level(

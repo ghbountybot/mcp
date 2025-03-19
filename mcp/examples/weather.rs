@@ -1,23 +1,14 @@
 #![allow(clippy::unused_async)]
 
-use axum::{
-    Router,
-    routing::{get, post},
-};
 use futures::future::pending;
 use mcp::Resource;
-use mcp::registry::resource::{ErasedSource, Source};
 use mcp::resources::MemoryResource;
-use mcp::rpc::McpImpl;
 use mcp_schema::ResourceContents;
 use rand::Rng;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 use tracing_subscriber::{fmt, prelude::*};
 
 #[derive(Default, Clone)]
@@ -25,8 +16,6 @@ struct State {
     resource: MemoryResource,
     history: Vec<f32>,
 }
-
-type SharedState = Arc<tokio::sync::Mutex<State>>;
 
 #[derive(Deserialize, JsonSchema)]
 struct ForecastParams {
@@ -152,6 +141,7 @@ async fn main() -> eyre::Result<()> {
         .name("history")
         .fixed_uri("history://temperature")
         .description("Temperature history")
+        .source(resource)
         .build()?;
 
     let service = mcp::BasicService::new()

@@ -15,6 +15,8 @@ pub use service::Service;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
+/// # Errors
+/// An error will occur if an I/O error occurs in stdio or stdin.
 pub async fn serve_over_stdio<S: Service + Send + Sync + 'static>(
     service: S,
 ) -> std::io::Result<()> {
@@ -22,6 +24,8 @@ pub async fn serve_over_stdio<S: Service + Send + Sync + 'static>(
     service.serve_over_stdio().await
 }
 
+/// # Errors
+/// An error will occur if an I/O error occurs in the network.
 pub async fn serve_over_sse<S: Service + Send + Sync + 'static>(
     listener: tokio::net::TcpListener,
     service: S,

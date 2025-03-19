@@ -39,15 +39,18 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
     ///
     /// # Errors
     /// If the uri does not match any of the registered resources, this will error.
-    pub fn get_source(&self, uri: &str) -> Result<&(dyn ErasedSource<State> + Send), Error> {
+    pub fn get_source(
+        &self,
+        uri: &str,
+    ) -> Result<Arc<dyn ErasedSource<State> + Send + Sync>, Error> {
         self.fixed_resources
             .get(uri)
-            .map(|resource| resource.source.as_ref())
+            .map(|resource| resource.source.clone())
             .or_else(|| {
                 self.template_resources
                     .iter()
                     .find(|resource| template_uri_matches(&resource.uri.0, uri))
-                    .map(|resource| resource.source.as_ref())
+                    .map(|resource| resource.source.clone())
             })
             .ok_or_else(|| Error {
                 message: format!("Resource at uri '{uri}' not found"),
@@ -180,7 +183,7 @@ pub struct Resource<State, Uri> {
     description: Option<String>,
     mime_type: Option<String>,
     annotated: mcp_schema::Annotated,
-    source: Box<dyn ErasedSource<State> + Send>,
+    source: Arc<dyn ErasedSource<State> + Send + Sync>,
 }
 
 impl<State: Send + Sync + 'static, Uri> Resource<State, Uri> {
@@ -225,7 +228,7 @@ pub struct ResourceBuilder<State, Uri> {
     description: Option<String>,
     mime_type: Option<String>,
     annotated: mcp_schema::Annotated,
-    source: Option<Box<dyn ErasedSource<State> + Send>>,
+    source: Option<Arc<dyn ErasedSource<State> + Send + Sync>>,
 }
 
 impl<State: Send + Sync + 'static, Uri> ResourceBuilder<State, Uri> {
@@ -259,8 +262,8 @@ impl<State: Send + Sync + 'static, Uri> ResourceBuilder<State, Uri> {
     }
 
     #[must_use]
-    pub fn source(mut self, source: impl Source<State> + Send + 'static) -> Self {
-        self.source = Some(Box::new(source));
+    pub fn source(mut self, source: impl Source<State> + Send + Sync + 'static) -> Self {
+        self.source = Some(Arc::new(source));
         self
     }
 

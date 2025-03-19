@@ -16,10 +16,9 @@ tracing = "0.1.41"
 eyre = "0.6"
 mcp-schema = "0.1.2"
 arc-swap = "1.7.1"
-tower-http = "0.6.2"
+tower-http = { version = "0.6.2", features = ["cors", "trace"] }
 
 [dev-dependencies]
-tower-http = { version = "0.6.2", features = ["cors", "trace"] }
 tracing-subscriber = "0.3.19"
 reqwest = { version = "0.12.12", features = ["json"] }
 rand = "0.9.0"
