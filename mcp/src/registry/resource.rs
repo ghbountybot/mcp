@@ -1,7 +1,10 @@
 use crate::Error;
+use futures::FutureExt;
+use mcp_schema::ResourceContents;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 fn template_uri_matches(_template: &str, _uri: &str) -> bool {
     todo!()
@@ -34,7 +37,7 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
     ///
     /// # Errors
     /// If the uri does not match any of the registered resources, this will error.
-    pub fn get_source(&self, uri: &str) -> Result<&(dyn Source<State> + Send), Error> {
+    pub fn get_source(&self, uri: &str) -> Result<&(dyn ErasedSource<State> + Send), Error> {
         self.fixed_resources
             .get(uri)
             .map(|resource| resource.source.as_ref())
@@ -61,7 +64,9 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
         uri: String,
     ) -> impl Future<Output = Result<mcp_schema::ReadResourceResult, Error>> + use<State> + Send + 'static
     {
-        let contents = self.get_source(&uri).map(|source| source.read(state, uri));
+        let contents = self
+            .get_source(&uri)
+            .map(|source| source.read_erased(state, uri));
 
         async move {
             let contents = contents?.await?;
@@ -83,7 +88,7 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
         state: State,
         uri: String,
     ) -> Result<impl Future<Output = ()> + use<State> + Send + 'static, Error> {
-        Ok(self.get_source(&uri)?.wait_for_change(state, uri))
+        Ok(self.get_source(&uri)?.wait_for_change_erased(state, uri))
     }
 
     /// Iterate through all registered fixed resources
@@ -108,18 +113,57 @@ impl<State> Default for ResourceRegistry<State> {
     }
 }
 
+pub type ResourceSlice = Arc<[ResourceContents]>;
+
 pub trait Source<State> {
     fn read(
         &self,
         state: State,
         uri: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<mcp_schema::ResourceContents>, Error>> + Send>>;
+    ) -> impl Future<Output = Result<ResourceSlice, Error>> + 'static + Send;
 
     fn wait_for_change(
         &self,
         state: State,
         uri: String,
+    ) -> impl Future<Output = ()> + 'static + Send;
+}
+
+pub trait ErasedSource<State> {
+    fn read_erased(
+        &self,
+        state: State,
+        uri: String,
+    ) -> Pin<Box<dyn Future<Output = Result<ResourceSlice, Error>> + Send>>;
+
+    fn wait_for_change_erased(
+        &self,
+        state: State,
+        uri: String,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+}
+
+impl<State, T> ErasedSource<State> for T
+where
+    T: Source<State>,
+{
+    fn read_erased(
+        &self,
+        state: State,
+        uri: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ResourceContents>, Error>> + Send>> {
+        let fut = self.read(state, uri);
+        fut.boxed()
+    }
+
+    fn wait_for_change_erased(
+        &self,
+        state: State,
+        uri: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        let fut = self.wait_for_change(state, uri);
+        fut.boxed()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -134,7 +178,7 @@ pub struct Resource<State, Uri> {
     description: Option<String>,
     mime_type: Option<String>,
     annotated: mcp_schema::Annotated,
-    source: Box<dyn Source<State> + Send>,
+    source: Box<dyn ErasedSource<State> + Send>,
 }
 
 impl<State: Send + Sync + 'static, Uri> Resource<State, Uri> {
@@ -179,7 +223,7 @@ pub struct ResourceBuilder<State, Uri> {
     description: Option<String>,
     mime_type: Option<String>,
     annotated: mcp_schema::Annotated,
-    source: Option<Box<dyn Source<State> + Send>>,
+    source: Option<Box<dyn ErasedSource<State> + Send>>,
 }
 
 impl<State: Send + Sync + 'static, Uri> ResourceBuilder<State, Uri> {
@@ -213,8 +257,8 @@ impl<State: Send + Sync + 'static, Uri> ResourceBuilder<State, Uri> {
     }
 
     #[must_use]
-    pub fn source(mut self, source: Box<dyn Source<State> + Send>) -> Self {
-        self.source = Some(source);
+    pub fn source(mut self, source: impl Source<State> + Send + 'static) -> Self {
+        self.source = Some(Box::new(source));
         self
     }
 

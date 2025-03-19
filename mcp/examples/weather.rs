@@ -5,8 +5,11 @@ use axum::{
     routing::{get, post},
 };
 use futures::future::pending;
-use mcp::registry::resource::Source;
+use mcp::Resource;
+use mcp::registry::resource::{ErasedSource, Source};
+use mcp::resources::MemoryResource;
 use mcp::rpc::McpImpl;
+use mcp_schema::ResourceContents;
 use rand::Rng;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -17,45 +20,13 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{fmt, prelude::*};
 
-const USE_STDIO: bool = true;
-
-#[derive(Clone, Default)]
-struct Resource {
-    inner: Arc<tokio::sync::Mutex<mcp::resources::MemoryResource>>,
-}
-
-impl<State: Send + Sync + 'static> Source<State> for Resource {
-    fn read(
-        &self,
-        state: State,
-        uri: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<mcp_schema::ResourceContents>, mcp::Error>> + Send>>
-    {
-        let inner = self.inner.clone().lock_owned();
-        Box::pin(async move {
-            let future = inner.await.read(state, uri);
-            future.await
-        })
-    }
-
-    fn wait_for_change(
-        &self,
-        state: State,
-        uri: String,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        let inner = self.inner.clone().lock_owned();
-        Box::pin(async move {
-            let future = inner.await.wait_for_change(state, uri);
-            future.await;
-        })
-    }
-}
-
 #[derive(Default, Clone)]
 struct State {
-    resource: Resource,
+    resource: MemoryResource,
     history: Vec<f32>,
 }
+
+type SharedState = Arc<tokio::sync::Mutex<State>>;
 
 #[derive(Deserialize, JsonSchema)]
 struct ForecastParams {
@@ -72,6 +43,8 @@ struct ForecastPromptParams {
     city: Option<String>,
 }
 
+const WEATHER_URI: &str = "history://weather";
+
 async fn get_forecast(
     state: Arc<std::sync::Mutex<State>>,
     params: ForecastParams,
@@ -86,24 +59,17 @@ async fn get_forecast(
         "a bit warm".to_string()
     };
 
-    let text;
-    let resource;
-    {
-        let mut state = state.lock().unwrap();
-        state.history.push(temperature);
-        text = format!("{:?}", state.history);
-        resource = state.resource.inner.clone();
-    }
-    resource
-        .lock_owned()
-        .await
-        .set(vec![mcp_schema::ResourceContents::Text(
-            mcp_schema::TextResourceContents {
-                uri: "history://weather".to_string(),
-                mime_type: None,
-                text,
-            },
-        )]);
+    let mut state = state.lock().unwrap();
+    state.history.push(temperature);
+    let text = format!("{:?}", state.history);
+
+    state
+        .resource
+        .set([ResourceContents::Text(mcp_schema::TextResourceContents {
+            uri: WEATHER_URI.to_string(),
+            mime_type: None,
+            text,
+        })]);
 
     Ok(vec![mcp_schema::PromptContent::Text(
         mcp_schema::TextContent {
@@ -149,13 +115,15 @@ async fn get_forecast_prompt(
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> eyre::Result<()> {
+    const USE_STDIO: bool = false;
+
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(std::io::stderr))
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .init();
 
-    let resource = Resource::default();
+    let resource = MemoryResource::default();
 
     let mut service = mcp::BasicService::new(
         Arc::new(std::sync::Mutex::new(State {
@@ -170,47 +138,42 @@ async fn main() {
         .name("get_forecast")
         .description("Get weather forecast for a location")
         .handler(get_forecast)
-        .build()
-        .unwrap();
+        .build()?;
 
     let do_nothing_tool = mcp::Tool::builder()
         .name("do_nothing")
         .description("Do absolutely nothing")
         .handler(do_nothing)
-        .build()
-        .unwrap();
+        .build()?;
 
     let forecast_prompt = mcp::Prompt::builder()
         .name("forecast")
         .description("Get the forecaster prompt")
         .handler(get_forecast_prompt)
-        .build()
-        .unwrap();
+        .build()?;
 
     let resource = mcp::Resource::builder()
         .name("history")
         .fixed_uri("history://temperature")
         .description("Temperature history")
-        .source(Box::new(resource))
-        .build()
-        .unwrap();
+        .build()?;
 
-    let tool_registry = service.tool_registry_mut().get_mut().unwrap();
+    let tool_registry = service.tool_registry_mut().get_mut()?;
     tool_registry.register(forecast_tool);
     tool_registry.register(do_nothing_tool);
 
-    let prompt_registry = service.prompt_registry_mut().get_mut().unwrap();
+    let prompt_registry = service.prompt_registry_mut().get_mut()?;
     prompt_registry.register(forecast_prompt);
 
     {
-        let mut resource_registry = service.resource_registry().lock().unwrap();
+        let mut resource_registry = service.resource_registry().lock()?;
         resource_registry.register_fixed(resource);
     }
 
     let state = Arc::new(McpImpl::new(service));
 
     if USE_STDIO {
-        state.serve_over_stdio().await.unwrap();
+        state.serve_over_stdio().await?;
     } else {
         let app = Router::new()
             .route("/api/message", post(McpImpl::message_handler))
@@ -220,8 +183,8 @@ async fn main() {
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
         tracing::info!("listening on {}", addr);
-        axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
-            .await
-            .unwrap();
+        axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await?;
     }
+
+    Ok(())
 }
