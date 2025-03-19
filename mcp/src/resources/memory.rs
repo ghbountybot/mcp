@@ -23,12 +23,15 @@ impl MemoryResource {
 
     #[must_use]
     pub fn get(&self) -> Arc<[ResourceContents]> {
-        self.tx.subscribe().try_recv().unwrap()
+        self.tx
+            .subscribe()
+            .try_recv()
+            .unwrap_or_else(|_| unreachable!())
     }
 
     pub fn set(&self, contents: impl IntoIterator<Item = ResourceContents>) {
         let contents: Arc<[ResourceContents]> = contents.into_iter().collect();
-        self.tx.send(contents).unwrap();
+        self.tx.send(contents).unwrap_or_else(|_| unreachable!());
     }
 }
 

@@ -10,15 +10,17 @@ pub struct ToolRegistry<State> {
     registry: HandlerRegistry<Tool<State>>,
 }
 
+impl<State> ToolRegistry<State> {
+    /// Register a new tool with the given name and handler
+    pub fn register(&mut self, tool: Tool<State>) {
+        self.registry.register(tool.name.clone(), tool);
+    }
+}
+
 impl<State: Send + Sync + 'static> ToolRegistry<State> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Register a new tool with the given name and handler
-    pub fn register(&mut self, tool: Tool<State>) {
-        self.registry.register(tool.name.clone(), tool);
     }
 
     /// Call a tool by name with the given arguments

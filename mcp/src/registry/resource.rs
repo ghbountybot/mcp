@@ -16,12 +16,7 @@ pub struct ResourceRegistry<State> {
     template_resources: Vec<Resource<State, TemplateResourceUri>>,
 }
 
-impl<State: Send + Sync + 'static> ResourceRegistry<State> {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
+impl<State> ResourceRegistry<State> {
     /// Register a new resource with a fixed uri
     pub fn register_fixed(&mut self, resource: Resource<State, FixedResourceUri>) {
         self.fixed_resources
@@ -31,6 +26,13 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
     /// Register a new resource with a template uri
     pub fn register_template(&mut self, resource: Resource<State, TemplateResourceUri>) {
         self.template_resources.push(resource);
+    }
+}
+
+impl<State: Send + Sync + 'static> ResourceRegistry<State> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Gets a source from a uri.
@@ -64,12 +66,12 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
         uri: String,
     ) -> impl Future<Output = Result<mcp_schema::ReadResourceResult, Error>> + use<State> + Send + 'static
     {
-        let contents = self
-            .get_source(&uri)
-            .map(|source| source.read_erased(state, uri));
+        let source = self.get_source(&uri);
+        let contents = source.map(|source| source.read_erased(state, uri));
 
         async move {
             let contents = contents?.await?;
+            let contents: Vec<_> = contents.iter().cloned().collect();
 
             Ok(mcp_schema::ReadResourceResult {
                 meta: None,
@@ -151,7 +153,7 @@ where
         &self,
         state: State,
         uri: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<ResourceContents>, Error>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<ResourceSlice, Error>> + Send>> {
         let fut = self.read(state, uri);
         fut.boxed()
     }

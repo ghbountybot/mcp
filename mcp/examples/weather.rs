@@ -116,7 +116,7 @@ async fn get_forecast_prompt(
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    const USE_STDIO: bool = false;
+    const USE_STDIO: bool = true;
 
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(std::io::stderr))
@@ -125,14 +125,10 @@ async fn main() -> eyre::Result<()> {
 
     let resource = MemoryResource::default();
 
-    let mut service = mcp::BasicService::new(
-        Arc::new(std::sync::Mutex::new(State {
-            resource: resource.clone(),
-            history: Vec::new(),
-        })),
-        "weather".to_string(),
-        "0.1.0".to_string(),
-    );
+    let state = Arc::new(std::sync::Mutex::new(State {
+        resource: resource.clone(),
+        history: Vec::new(),
+    }));
 
     let forecast_tool = mcp::Tool::builder()
         .name("get_forecast")
@@ -152,38 +148,24 @@ async fn main() -> eyre::Result<()> {
         .handler(get_forecast_prompt)
         .build()?;
 
-    let resource = mcp::Resource::builder()
+    let resource = Resource::builder()
         .name("history")
         .fixed_uri("history://temperature")
         .description("Temperature history")
         .build()?;
 
-    let tool_registry = service.tool_registry_mut().get_mut()?;
-    tool_registry.register(forecast_tool);
-    tool_registry.register(do_nothing_tool);
-
-    let prompt_registry = service.prompt_registry_mut().get_mut()?;
-    prompt_registry.register(forecast_prompt);
-
-    {
-        let mut resource_registry = service.resource_registry().lock()?;
-        resource_registry.register_fixed(resource);
-    }
-
-    let state = Arc::new(McpImpl::new(service));
+    let service = mcp::BasicService::new()
+        .tool(forecast_tool)
+        .tool(do_nothing_tool)
+        .prompt(forecast_prompt)
+        .fixed_resource(resource)
+        .state(state);
 
     if USE_STDIO {
-        state.serve_over_stdio().await?;
+        mcp::serve_over_stdio(service).await?;
     } else {
-        let app = Router::new()
-            .route("/api/message", post(McpImpl::message_handler))
-            .route("/api/events", get(McpImpl::sse_handler))
-            .layer(CorsLayer::permissive())
-            .with_state(state);
-
-        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-        tracing::info!("listening on {}", addr);
-        axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+        mcp::serve_over_sse(listener, service).await?;
     }
 
     Ok(())

@@ -11,15 +11,17 @@ pub struct PromptRegistry<State> {
     registry: HandlerRegistry<Prompt<State>>,
 }
 
+impl<State> PromptRegistry<State> {
+    /// Register a new tool with the given name and handler
+    pub fn register(&mut self, tool: Prompt<State>) {
+        self.registry.register(tool.name.clone(), tool);
+    }
+}
+
 impl<State: Send + Sync + 'static> PromptRegistry<State> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Register a new tool with the given name and handler
-    pub fn register(&mut self, tool: Prompt<State>) {
-        self.registry.register(tool.name.clone(), tool);
     }
 
     /// Call a tool by name with the given arguments
