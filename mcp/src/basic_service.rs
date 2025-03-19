@@ -282,10 +282,16 @@ impl<State: Clone + Send + Sync + 'static> Service for BasicService<State> {
         &self,
         request: mcp_schema::UnsubscribeParams,
     ) -> impl Future<Output = Result<mcp_schema::EmptyResult, Error>> + Send {
-        self.resource_subscriptions
+        let subscription = self
+            .resource_subscriptions
             .lock()
             .unwrap()
             .remove(&request.uri);
+
+        if let Some(subscription) = subscription {
+            subscription.abort();
+        }
+
         async move {
             Ok(mcp_schema::EmptyResult {
                 meta: None,
