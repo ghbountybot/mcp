@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.95"
 axum = { version = "0.8.1", features = ["tokio"] }
 futures = "0.3.31"
 schemars = "0.8.21"
@@ -15,7 +14,6 @@ tokio-stream = "0.1.17"
 tracing = "0.1.41"
 eyre = "0.6"
 mcp-schema = "0.1.2"
-arc-swap = "1.7.1"
 tower-http = { version = "0.6.2", features = ["cors", "trace"] }
 
 [dev-dependencies]
