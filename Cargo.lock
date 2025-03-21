@@ -749,8 +749,7 @@ dependencies = [
 [[package]]
 name = "mcp-schema"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e95e54f3e9571d3fadb1f4fb330981050b935b51df05308ae76c3ad523672c9"
+source = "git+https://github.com/TestingPlant/mcp-schema.git?branch=fix-default-paginated-params#830caa4b7fd1b3ed3b7c9bf842160ea681d7ca1a"
 dependencies = [
  "serde",
  "serde_json",

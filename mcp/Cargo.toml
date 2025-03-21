@@ -13,7 +13,7 @@ tokio = { version = "1.43.0", features = ["full", "macros"] }
 tokio-stream = "0.1.17"
 tracing = "0.1.41"
 eyre = "0.6"
-mcp-schema = "0.1.2"
+mcp-schema = { git = "https://github.com/TestingPlant/mcp-schema.git", branch = "fix-default-paginated-params" }
 tower-http = { version = "0.6.2", features = ["cors", "trace"] }
 
 [dev-dependencies]
