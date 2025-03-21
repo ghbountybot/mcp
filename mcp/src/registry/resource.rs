@@ -74,7 +74,6 @@ impl<State: Send + Sync + 'static> ResourceRegistry<State> {
 
         async move {
             let contents = contents?.await?;
-            let contents: Vec<_> = contents.iter().cloned().collect();
 
             Ok(mcp_schema::ReadResourceResult {
                 meta: None,
@@ -118,14 +117,12 @@ impl<State> Default for ResourceRegistry<State> {
     }
 }
 
-pub type ResourceSlice = Arc<[ResourceContents]>;
-
 pub trait Source<State> {
     fn read(
         &self,
         state: State,
         uri: String,
-    ) -> impl Future<Output = Result<ResourceSlice, Error>> + 'static + Send;
+    ) -> impl Future<Output = Result<Vec<ResourceContents>, Error>> + 'static + Send;
 
     fn wait_for_change(
         &self,
@@ -139,7 +136,7 @@ pub trait ErasedSource<State> {
         &self,
         state: State,
         uri: String,
-    ) -> Pin<Box<dyn Future<Output = Result<ResourceSlice, Error>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ResourceContents>, Error>> + Send>>;
 
     fn wait_for_change_erased(
         &self,
@@ -156,7 +153,7 @@ where
         &self,
         state: State,
         uri: String,
-    ) -> Pin<Box<dyn Future<Output = Result<ResourceSlice, Error>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ResourceContents>, Error>> + Send>> {
         let fut = self.read(state, uri);
         fut.boxed()
     }

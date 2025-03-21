@@ -1,5 +1,5 @@
 use crate::Error;
-use crate::registry::resource::{ResourceSlice, Source};
+use crate::registry::resource::Source;
 use mcp_schema::ResourceContents;
 use std::sync::Arc;
 
@@ -40,9 +40,10 @@ impl<State: Send> Source<State> for MemoryResource {
         &self,
         _: State,
         _: String,
-    ) -> impl Future<Output = Result<ResourceSlice, Error>> + Send + 'static {
+    ) -> impl Future<Output = Result<Vec<mcp_schema::ResourceContents>, Error>> + Send + 'static
+    {
         let contents = self.get();
-        async move { Ok(contents) }
+        async move { Ok(contents.iter().cloned().collect()) }
     }
 
     fn wait_for_change(&self, _: State, _: String) -> impl Future<Output = ()> + Send + 'static {
