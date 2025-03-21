@@ -1,37 +1,35 @@
 use crate::Error;
 use crate::registry::resource::Source;
 use mcp_schema::ResourceContents;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
-#[derive(Clone)]
-pub struct MemoryResource {
-    tx: tokio::sync::broadcast::Sender<Arc<[ResourceContents]>>,
+#[derive(Default)]
+pub struct MemoryResourceInner {
+    contents: Mutex<Vec<mcp_schema::ResourceContents>>,
+    change: Notify,
 }
 
-impl Default for MemoryResource {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Clone, Default)]
+pub struct MemoryResource {
+    inner: Arc<MemoryResourceInner>,
 }
 
 impl MemoryResource {
     #[must_use]
     pub fn new() -> Self {
-        let (tx, _) = tokio::sync::broadcast::channel(1);
-        Self { tx }
+        Self::default()
     }
 
     #[must_use]
-    pub fn get(&self) -> Arc<[ResourceContents]> {
-        self.tx
-            .subscribe()
-            .try_recv()
-            .unwrap_or_else(|_| unreachable!())
+    pub fn get(&self) -> Vec<ResourceContents> {
+        self.inner.contents.lock().unwrap().clone()
     }
 
     pub fn set(&self, contents: impl IntoIterator<Item = ResourceContents>) {
-        let contents: Arc<[ResourceContents]> = contents.into_iter().collect();
-        self.tx.send(contents).unwrap_or_else(|_| unreachable!());
+        let contents = contents.into_iter().collect();
+        *self.inner.contents.lock().unwrap() = contents;
+        self.inner.change.notify_waiters();
     }
 }
 
@@ -43,13 +41,13 @@ impl<State: Send> Source<State> for MemoryResource {
     ) -> impl Future<Output = Result<Vec<mcp_schema::ResourceContents>, Error>> + Send + 'static
     {
         let contents = self.get();
-        async move { Ok(contents.iter().cloned().collect()) }
+        async move { Ok(contents) }
     }
 
     fn wait_for_change(&self, _: State, _: String) -> impl Future<Output = ()> + Send + 'static {
-        let mut recv = self.tx.subscribe();
+        let inner = self.inner.clone();
         async move {
-            recv.recv().await.unwrap();
+            inner.change.notified().await;
         }
     }
 }
